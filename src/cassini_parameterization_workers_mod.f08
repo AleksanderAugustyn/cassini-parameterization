@@ -117,6 +117,11 @@ module cassini_parameterization_workers_mod
     public :: cosine_nodes_s
     public :: resolve_s
     public :: quadrupole_f
+    public :: curve_on_tables_s
+    public :: star_margin_s
+    public :: neck_s
+    public :: profile_nodes_s
+    public :: profile_s
 
 contains
 
@@ -521,6 +526,282 @@ contains
                     + sum((4.0_rk * z(half + 1_ik:)**2 - rho(half + 1_ik:)**2) * dv(half + 1_ik:))
         end if
     end subroutine raw_moments_s
+
+    !===========================================================================
+    ! SCAN, STAR MARGIN, NECK, PROFILE
+    !===========================================================================
+
+    !> The final-frame curve on a table's nodes: rho = rho_bar / c,
+    !! z = z_bar / c - z_shift (= (z_bar - zm_raw) / c, written so that an exact
+    !! z_bar = 0 lands on -z_shift bit for bit), derivatives / c.
+    pure subroutine curve_on_tables_s(params, res, tab, rho, z, drho_dx, dz_dx)
+        real(kind = rk), intent(in) :: params(:)
+        type(resolve_t), intent(in) :: res
+        type(tables_t), intent(in) :: tab
+        real(kind = rk), intent(out) :: rho(:), z(:), drho_dx(:), dz_dx(:)
+        real(kind = rk) :: r(tab%n_nodes), dr(tab%n_nodes)
+        call series_on_tables_s(params, res%n_active, tab, r, dr)
+        call lemniscate_nodes_s(tab%x, r, dr, res%eps, rho, z, drho_dx, dz_dx)
+        rho = rho / res%c
+        z = z / res%c - res%z_shift
+        drho_dx = drho_dx / res%c
+        dz_dx = dz_dx / res%c
+    end subroutine curve_on_tables_s
+
+    !> The star-convexity margin and the fold flag on a final-frame scan.
+    !!
+    !! d = (rho dz_dx - z drho_dx) / hypot(dz_dx, drho_dx), the signed distance
+    !! from the origin (the centre of mass) to the tangent line, at every
+    !! interior node off the axis (rho > 0: the poles, a separated shape's
+    !! x = 0 tip and the pinch point are on the axis and skipped; the pinch
+    !! point also has hypot = 0). d > 0 everywhere is monotone theta(x), i.e.
+    !! star-convexity. d_min is the minimum over the evaluated nodes, and 0 for
+    !! a separated shape, where it is meaningless. is_folded: any interior
+    !! off-axis node with dz_dx <= 0 (rho(z) multi-valued; a polar dimple).
+    pure subroutine star_margin_s(res, rho, z, drho_dx, dz_dx, d_min, is_folded)
+        type(resolve_t), intent(in) :: res
+        real(kind = rk), intent(in) :: rho(:), z(:), drho_dx(:), dz_dx(:)
+        real(kind = rk), intent(out) :: d_min
+        logical, intent(out) :: is_folded
+        real(kind = rk) :: h, d
+        integer(kind = ik) :: j
+        logical :: first
+        d_min = 0.0_rk
+        is_folded = .false.
+        first = .true.
+        do j = 2_ik, size(rho, kind = ik) - 1_ik
+            if (.not. (rho(j) > 0.0_rk)) cycle
+            if (.not. (dz_dx(j) > 0.0_rk)) is_folded = .true.
+            h = hypot(dz_dx(j), drho_dx(j))
+            if (.not. (h > 0.0_rk)) cycle
+            d = (rho(j) * dz_dx(j) - z(j) * drho_dx(j)) / h
+            if (first .or. d < d_min) d_min = d
+            first = .false.
+        end do
+        if (res%is_separated) d_min = 0.0_rk
+    end subroutine star_margin_s
+
+    !> The neck (spec "Neck") from a final-frame scan rho on scan_tab's nodes.
+    !!
+    !! Candidates are the interior local minima of rho (rho(k) < rho(k-1) and
+    !! rho(k) <= rho(k+1)); rho = 0 at both poles, so each has a local maximum
+    !! on either side, and a polar dimple creates none. The smallest wins;
+    !! candidates within NECK_TIE_TOL relative tie and the tie goes to the
+    !! larger x (the scan runs north to south, so the first one is kept). The
+    !! winner is refined to the root of d rho_bar/dx between its scan
+    !! neighbours (`neck_root_f`). Pinched and separated shapes:
+    !! found, rho_neck = 0, z_neck = -z_shift (the pinch, or the gap's middle).
+    !!
+    !! @param[out] x_neck  Optional: the lemniscate coordinate of the neck
+    pure subroutine neck_s(params, res, scan_tab, rho, found, z_neck, rho_neck, x_neck)
+        real(kind = rk), intent(in) :: params(:)
+        type(resolve_t), intent(in) :: res
+        type(tables_t), intent(in) :: scan_tab
+        real(kind = rk), intent(in) :: rho(:)
+        logical, intent(out) :: found
+        real(kind = rk), intent(out) :: z_neck, rho_neck
+        real(kind = rk), intent(out), optional :: x_neck
+        real(kind = rk) :: x, r, dr, rb, zb, drb, dzb
+        integer(kind = ik) :: k, best
+
+        found = .false.
+        z_neck = 0.0_rk
+        rho_neck = 0.0_rk
+        if (present(x_neck)) x_neck = 0.0_rk
+
+        if (res%is_pinched .or. res%is_separated) then
+            found = .true.
+            z_neck = -res%z_shift
+            return
+        end if
+
+        best = 0_ik
+        do k = 2_ik, size(rho, kind = ik) - 1_ik
+            if (.not. (rho(k) < rho(k - 1_ik) .and. rho(k) <= rho(k + 1_ik))) cycle
+            if (best == 0_ik) then
+                best = k
+            else if (rho(k) < rho(best) - NECK_TIE_TOL * rho(best)) then
+                best = k
+            end if
+        end do
+        if (best == 0_ik) return
+
+        x = neck_root_f(params, res, scan_tab%x(best + 1_ik), scan_tab%x(best), scan_tab%x(best - 1_ik))
+        call series_at_s(params, res%n_active, x, r, dr)
+        call lemniscate_point_s(x, r, dr, res%eps, rb, zb, drb, dzb)
+        found = .true.
+        rho_neck = rb / res%c
+        z_neck = zb / res%c - res%z_shift
+        if (present(x_neck)) x_neck = x
+    end subroutine neck_s
+
+    !> The minimum of rho_bar near a scan minimum at x_mid, scan neighbours
+    !! x_lo < x_mid < x_hi, as a root of g = d rho_bar/dx.
+    !!
+    !! The half-bracket on the side g(x_mid) points to is closed when g
+    !! changes sign across it; g(x_mid) = 0 exactly (x_mid = 0 on a
+    !! reflection-symmetric shape) returns x_mid. Otherwise the minimum shares
+    !! a scan interval with a maximum (TWO_NECKS: a 1e-5-deep minimum, g < 0
+    !! at all three scan nodes): g is sampled on NECK_SUBDIVISIONS equal
+    !! sub-intervals of [x_lo, x_hi], every - to + change is closed, and the
+    !! smallest rho_bar wins. With no sign change anywhere x_mid stands.
+    pure function neck_root_f(params, res, x_lo, x_mid, x_hi) result(x)
+        real(kind = rk), intent(in) :: params(:)
+        type(resolve_t), intent(in) :: res
+        real(kind = rk), intent(in) :: x_lo, x_mid, x_hi
+        real(kind = rk) :: x
+        integer(kind = ik), parameter :: NECK_SUBDIVISIONS = 16_ik
+        real(kind = rk) :: rho_mid, g_mid, rho_end, g_end, xa, ga, xb, gb, xr, rho_r, g_r, best_rho
+        integer(kind = ik) :: i
+
+        x = x_mid
+        call neck_point_s(params, res, x_mid, rho_mid, g_mid)
+        if (.not. (abs(g_mid) > 0.0_rk)) return
+        if (g_mid > 0.0_rk) then
+            call neck_point_s(params, res, x_lo, rho_end, g_end)
+            if (g_end < 0.0_rk) then
+                x = illinois_root_f(params, res, x_lo, g_end, x_mid, g_mid)
+                return
+            end if
+        else
+            call neck_point_s(params, res, x_hi, rho_end, g_end)
+            if (g_end > 0.0_rk) then
+                x = illinois_root_f(params, res, x_mid, g_mid, x_hi, g_end)
+                return
+            end if
+        end if
+
+        best_rho = rho_mid
+        xa = x_lo
+        call neck_point_s(params, res, xa, rho_end, ga)
+        do i = 1_ik, NECK_SUBDIVISIONS
+            xb = x_lo + (x_hi - x_lo) * real(i, rk) / real(NECK_SUBDIVISIONS, rk)
+            call neck_point_s(params, res, xb, rho_end, gb)
+            if (ga < 0.0_rk .and. gb > 0.0_rk) then
+                xr = illinois_root_f(params, res, xa, ga, xb, gb)
+                call neck_point_s(params, res, xr, rho_r, g_r)
+                if (rho_r < best_rho) then
+                    best_rho = rho_r
+                    x = xr
+                end if
+            end if
+            xa = xb
+            ga = gb
+        end do
+    end function neck_root_f
+
+    !> The root of g = d rho_bar/dx in [lo, hi] with g(lo) < 0 < g(hi), by
+    !! regula falsi (Illinois: an end that stays twice has its g halved) to
+    !! X_SOLVE_TOL in x, with bisection whenever the secant point leaves the
+    !! bracket.
+    pure function illinois_root_f(params, res, lo_in, g_lo_in, hi_in, g_hi_in) result(x)
+        real(kind = rk), intent(in) :: params(:)
+        type(resolve_t), intent(in) :: res
+        real(kind = rk), intent(in) :: lo_in, g_lo_in, hi_in, g_hi_in
+        real(kind = rk) :: x
+        integer(kind = ik), parameter :: MAX_ITER = 200_ik
+        real(kind = rk) :: lo, hi, g_lo, g_hi, g_new, rho_new
+        integer(kind = ik) :: iter, last
+        lo = lo_in
+        hi = hi_in
+        g_lo = g_lo_in
+        g_hi = g_hi_in
+        x = 0.5_rk * (lo + hi)
+        last = 0_ik
+        do iter = 1_ik, MAX_ITER
+            if (hi - lo <= X_SOLVE_TOL) exit
+            x = hi - g_hi * (hi - lo) / (g_hi - g_lo)
+            if (.not. (x > lo .and. x < hi)) x = 0.5_rk * (lo + hi)
+            call neck_point_s(params, res, x, rho_new, g_new)
+            if (.not. (abs(g_new) > 0.0_rk)) exit
+            if (g_new > 0.0_rk) then
+                hi = x
+                g_hi = g_new
+                if (last == 1_ik) g_lo = 0.5_rk * g_lo
+                last = 1_ik
+            else
+                lo = x
+                g_lo = g_new
+                if (last == -1_ik) g_hi = 0.5_rk * g_hi
+                last = -1_ik
+            end if
+        end do
+    end function illinois_root_f
+
+    !> rho_bar and g = d rho_bar/dx (total, raw frame) at one x.
+    pure subroutine neck_point_s(params, res, x, rho_bar, g)
+        real(kind = rk), intent(in) :: params(:)
+        type(resolve_t), intent(in) :: res
+        real(kind = rk), intent(in) :: x
+        real(kind = rk), intent(out) :: rho_bar, g
+        real(kind = rk) :: r, dr, zb, dzb
+        call series_at_s(params, res%n_active, x, r, dr)
+        call lemniscate_point_s(x, r, dr, res%eps, rho_bar, zb, g, dzb)
+    end subroutine neck_point_s
+
+    !> The profile's node set, north pole first.
+    !!
+    !! Connected: `cosine_nodes_s(n)`. Pinched or separated: two lobes. The
+    !! north lobe has m1 = ceil(n/2) nodes x = cos(phi), phi uniform on
+    !! [0, pi/2], its last node exactly x = 0 (the north tip); the south lobe
+    !! the other m2 nodes, mirrored the same way, its first node exactly
+    !! x = 0 (the south tip). Both tips are nodes, so the polyline runs along
+    !! the axis across the gap. lobe_sign is +1 on north nodes, -1 on south.
+    !! n >= CASSINI_N_POINTS_FLOOR.
+    pure subroutine profile_nodes_s(res, n, x, lobe_sign)
+        type(resolve_t), intent(in) :: res
+        integer(kind = ik), intent(in) :: n
+        real(kind = rk), intent(out) :: x(n), lobe_sign(n)
+        integer(kind = ik) :: j, m1, m2
+        if (res%is_pinched .or. res%is_separated) then
+            m1 = (n + 1_ik) / 2_ik
+            m2 = n - m1
+            do j = 0_ik, m1 - 1_ik
+                x(j + 1_ik) = cos(PI_C / 2.0_rk * real(j, rk) / real(max(m1 - 1_ik, 1_ik), rk))
+            end do
+            do j = 0_ik, m2 - 1_ik
+                x(m1 + 1_ik + j) = -cos(PI_C / 2.0_rk * real(m2 - 1_ik - j, rk) &
+                        / real(max(m2 - 1_ik, 1_ik), rk))
+            end do
+            x(m1) = 0.0_rk
+            x(m1 + 1_ik) = 0.0_rk
+            lobe_sign(1:m1) = 1.0_rk
+            lobe_sign(m1 + 1_ik:) = -1.0_rk
+        else
+            call cosine_nodes_s(n, x)
+            lobe_sign = merge(1.0_rk, -1.0_rk, x >= 0.0_rk)
+        end if
+    end subroutine profile_nodes_s
+
+    !> The parametric profile (z, rho, drho/dz) in the final frame on
+    !! `profile_nodes_s`, north pole first, z descending except where the
+    !! curve folds. drho/dz = drho_dx / dz_dx; at the poles, at the tips (the
+    !! x = 0 nodes of a pinched or separated shape, whose z_bar takes its
+    !! lobe's sign) and at a node with dz_dx = 0 exactly it is 0, with rho as
+    !! computed (0 at poles and tips).
+    pure subroutine profile_s(params, res, n, z, rho, drho_dz)
+        real(kind = rk), intent(in) :: params(:)
+        type(resolve_t), intent(in) :: res
+        integer(kind = ik), intent(in) :: n
+        real(kind = rk), intent(out) :: z(n), rho(n), drho_dz(n)
+        real(kind = rk) :: x(n), lobe_sign(n), r, dr, rb, zb, drb, dzb
+        integer(kind = ik) :: j
+        logical :: tip
+        call profile_nodes_s(res, n, x, lobe_sign)
+        do j = 1_ik, n
+            call series_at_s(params, res%n_active, x(j), r, dr)
+            call lemniscate_point_s(x(j), r, dr, res%eps, rb, zb, drb, dzb)
+            tip = (res%is_pinched .or. res%is_separated) .and. .not. (abs(x(j)) > 0.0_rk)
+            if (tip) zb = lobe_sign(j) * abs(zb)
+            rho(j) = rb / res%c
+            z(j) = zb / res%c - res%z_shift
+            if (j == 1_ik .or. j == n .or. tip .or. .not. (abs(dzb) > 0.0_rk)) then
+                drho_dz(j) = 0.0_rk
+            else
+                drho_dz(j) = drb / dzb
+            end if
+        end do
+    end subroutine profile_s
 
     !> The two radicands without cancellation. Q_big = p + |R^2 u + s| is a
     !! same-sign sum; Q_small = 4 R^4 x^2 (1 - x^2) / Q_big from the product

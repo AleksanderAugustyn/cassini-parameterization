@@ -6,7 +6,9 @@ module cassini_test_reference_mod
     use precision_utilities_mod, only: ik, rk
     use mathematical_and_physical_constants_mod, only: PI_C
     use mathematical_utilities_mod, only: compute_gauss_legendre_quadrature_s
-    use cassini_parameterization_workers_mod, only: resolve_t, series_at_s, lemniscate_point_s
+    use cassini_parameterization_workers_mod, only: resolve_t, tables_t, series_at_s, &
+            lemniscate_point_s, quadrature_nodes_s, cosine_nodes_s, build_tables_s, resolve_s, &
+            curve_on_tables_s, CASSINI_N_GL_HALF, CASSINI_N_R_CHECK, CASSINI_MAX_ORDER
 
     implicit none
 
@@ -16,6 +18,8 @@ module cassini_test_reference_mod
     public :: reference_volume_s
     public :: reference_quadrupole_f
     public :: reference_gl_volume_s
+    public :: test_resolve_s
+    public :: test_scan_s
 
     !> Simpson intervals per half of [-1, 1] (10,001 nodes per half, x = 0 shared).
     integer(kind = ik), parameter :: SIMPSON_HALF = 10000_ik
@@ -153,5 +157,32 @@ contains
         vbar = PI_C * f0
         zm_raw = f1 / f0
     end subroutine reference_gl_volume_s
+
+    !> Test plumbing: resolves params on freshly built order-20 tables.
+    subroutine test_resolve_s(params, res, status)
+        real(kind = rk), intent(in) :: params(:)
+        type(resolve_t), intent(out) :: res
+        integer(kind = ik), intent(out) :: status
+        type(tables_t) :: quad_tab, check_tab
+        real(kind = rk) :: quad_x(2 * CASSINI_N_GL_HALF), quad_w(2 * CASSINI_N_GL_HALF)
+        real(kind = rk) :: check_x(CASSINI_N_R_CHECK)
+        call quadrature_nodes_s(quad_x, quad_w)
+        call build_tables_s(quad_x, CASSINI_MAX_ORDER, quad_tab)
+        call cosine_nodes_s(CASSINI_N_R_CHECK, check_x)
+        call build_tables_s(check_x, CASSINI_MAX_ORDER, check_tab)
+        call resolve_s(params, quad_tab, quad_w, check_tab, res, status)
+    end subroutine test_resolve_s
+
+    !> Test plumbing: the final-frame curve on an n-node cosine scan.
+    subroutine test_scan_s(params, res, n, x, rho, z, drho_dx, dz_dx)
+        real(kind = rk), intent(in) :: params(:)
+        type(resolve_t), intent(in) :: res
+        integer(kind = ik), intent(in) :: n
+        real(kind = rk), intent(out) :: x(n), rho(n), z(n), drho_dx(n), dz_dx(n)
+        type(tables_t) :: tab
+        call cosine_nodes_s(n, x)
+        call build_tables_s(x, CASSINI_MAX_ORDER, tab)
+        call curve_on_tables_s(params, res, tab, rho, z, drho_dx, dz_dx)
+    end subroutine test_scan_s
 
 end module cassini_test_reference_mod
