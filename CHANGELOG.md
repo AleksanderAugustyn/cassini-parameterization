@@ -34,10 +34,13 @@ validated at 5).
 centre of mass to every tangent line of the profile to be at least
 `STAR_CONVEXITY_MARGIN` = 1e-3 (R0 units), provisional and inclusive: folded
 (dimpled) shapes are accepted when star-convex, and `d_min` is exported so
-the value can be tightened from data. The gate is sampled on the scan grid;
-at 129 nodes 6 of the 26,620 points of the paper's step-0.05 lattice pass
-with a dense d_min below the margin (2 not star-convex), at 2049 none.
-Pinched shapes are 102 by rule; separated shapes 103.
+the value can be tightened from data. The scan grid locates the minima of
+d and each is refined by a golden-section search between its scan
+neighbours, so the verdict does not depend on the scan size: a purely
+sampled gate passed shapes that are not star-convex (52 points of the
+paper's lattice at alpha2 = 0, ±0.1 on the 65-node floor scan, 10 at 129;
+with the refinement none, against a 100,001-node scan). Pinched shapes are
+102 by rule; separated shapes 103.
 
 **Builder decisions** (the owner can veto):
 
@@ -62,6 +65,8 @@ Pinched shapes are 102 by rule; separated shapes 103.
 9. No tolerance on the toroidal test.
 10. `compute_epsilon_f` accepts 0 … 21 parameters.
 11. Legendre tables are `p(0:order, n_nodes)` per grid.
-12. The quadrature substitution is x = ±sin²(πt/2), not the spec's x = ±t²:
+12. d_min is the refined minimum of d along the curve, not the minimum over
+    the scan nodes (see the gate policy).
+13. The quadrature substitution is x = ±sin²(πt/2), not the spec's x = ±t²:
     the latter treats only x = 0 and misses by up to 1.2e-6 near a pole
     close to lifting off (5.6e-5 on the bare oval).

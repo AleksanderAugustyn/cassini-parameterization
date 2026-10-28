@@ -73,10 +73,11 @@
  *
  * Grids:
  *   n_x_grid (at least CASSINI_PARAM_N_X_GRID_FLOOR) is the scan resolution:
- *   the star margin, the fold flag, the neck search and the R(theta) brackets
- *   are sampled on it. The gate is sampled: at n_x_grid = 129, 6 of the
- *   26,620 points of the paper's lattice pass with a dense d_min below the
- *   margin. Use n_x_grid of order 2049 where that matters.
+ *   the fold flag, the neck search and the R(theta) brackets are sampled on
+ *   it, and it locates the minima of the star margin d, each of which is
+ *   then refined between its scan neighbours, so the gate does not depend on
+ *   n_x_grid. The neck is found from the scan: a neck narrower than the scan
+ *   spacing can be missed at the floor.
  */
 #ifndef CASSINI_PARAMETERIZATION_H
 #define CASSINI_PARAMETERIZATION_H

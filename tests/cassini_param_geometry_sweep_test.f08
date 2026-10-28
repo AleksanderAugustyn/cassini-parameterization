@@ -3,12 +3,13 @@
 !!
 !! Tier A: counts of the R(theta)-path status {0, 100, 101, 102, 103} on the
 !! 129-node scan, of folded shapes among the accepted ones, of shapes with a
-!! neck, and of sampled-gate misses: accepted shapes whose d_min on a
-!! 2049-node scan is below STAR_CONVEXITY_MARGIN (the gate is sampled, and
-!! between 129-scan nodes d can dip by up to ~5e-3; two lattice points are
-!! not star-convex at all). On the default grid they are asserted against
-!! the goldens below (locked at STAR_CONVEXITY_MARGIN = 1e-3; re-lock when
-!! the margin changes).
+!! neck, and of gate misses: accepted shapes whose d_min on a 2049-node
+!! scan is below STAR_CONVEXITY_MARGIN. The margin is refined between scan
+!! nodes, so the count is 0 on every pass; before the refinement the
+!! 129-node sampled gate missed 6 here (58 on the full lattice, 2 of the 6
+!! not star-convex at all). On the default grid the counts are asserted
+!! against the goldens below (locked at STAR_CONVEXITY_MARGIN = 1e-3;
+!! re-lock when the margin changes).
 !! Tier B: for every accepted shape the 2049-node scan confirms, the volume and centre of mass from
 !! R(theta) alone (|V/(4 pi/3) - 1|, |zcm| <= 1e-10), on composite
 !! Gauss-Legendre panels in theta whose breakpoints are theta(x_k) of the
@@ -38,7 +39,7 @@ program cassini_param_geometry_sweep_test
     !> Tier A goldens of the default grid: R(theta) statuses 0, 100, 101, 102,
     !! 103, folded among accepted, neck found, sampled-gate misses. Captured on
     !! the first green run.
-    integer(kind = ik), parameter :: GOLDEN(8) = [25926_ik, 0_ik, 0_ik, 694_ik, 0_ik, 11497_ik, 12204_ik, 6_ik]
+    integer(kind = ik), parameter :: GOLDEN(8) = [25920_ik, 0_ik, 0_ik, 700_ik, 0_ik, 11493_ik, 12204_ik, 0_ik]
     integer(kind = ik), parameter :: N_X_DENSE = 2049_ik
 
     type(cache_t) :: cache, dense

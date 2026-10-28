@@ -29,6 +29,7 @@ program cassini_param_boundary_test
     call test_extents()
     call test_theta_counts()
     call test_small_cache()
+    call test_large_sizes()
     call test_summary()
 
 contains
@@ -202,5 +203,24 @@ contains
         call cache_radius_grid_s(cache, SHORT, radii, status)
         call assert_int_eq(status, 0_ik, 'B8 [0.25, 0, 0] on a 3-cache -> 0')
     end subroutine test_small_cache
+
+    !> B9: large but legal sizes compute (Release builds with -fstack-arrays
+    !! must not put work arrays of the caller's size on the stack).
+    subroutine test_large_sizes()
+        type(cache_t) :: cache
+        type(cassini_geometry_t) :: geometry
+        real(kind = rk), allocatable :: z(:), rho(:), drho(:)
+        integer(kind = ik) :: status
+        integer(kind = ik), parameter :: N_BIG = 2000000_ik
+        allocate(z(N_BIG), rho(N_BIG), drho(N_BIG))
+        call cache_init_s(cache, 5_ik, 65_ik, thetas, status)
+        call cache_rho_profile_s(cache, GS, z, rho, drho, status)
+        call assert_int_eq(status, 0_ik, 'B9 a 2,000,000-node profile computes')
+        call assert_true(rho(N_BIG / 2_ik) > 0.0_rk, 'B9 large profile is the shape')
+        call cache_init_s(cache, 5_ik, 600001_ik, thetas, status)
+        call assert_int_eq(status, 0_ik, 'B9 a 600,001-node scan cache builds')
+        call cache_geometry_s(cache, GS, geometry, status)
+        call assert_int_eq(status, 0_ik, 'B9 geometry on a 600,001-node scan computes')
+    end subroutine test_large_sizes
 
 end program cassini_param_boundary_test

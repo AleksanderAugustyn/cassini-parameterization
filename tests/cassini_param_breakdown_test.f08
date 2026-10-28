@@ -40,6 +40,7 @@ program cassini_param_breakdown_test
     call test_pipeline_continuity()
     call test_scan_floor(GS, 'GS')
     call test_scan_floor(ASYM, 'ASYM')
+    call test_gate_at_the_floor()
     call test_summary()
 
 contains
@@ -316,5 +317,27 @@ contains
         call assert_true(maxval(abs(radii(:, 1) - radii(:, 3))) <= 1.0e-12_rk &
                 .and. maxval(abs(radii(:, 2) - radii(:, 3))) <= 1.0e-12_rk, 'K10 radius_grid vs scan size ' // name)
     end subroutine test_scan_floor
+
+    !> K11: between scan nodes d can dip below its sampled minimum. The box
+    !! corner [0.95, 0.25, 0.1, 0.25, 0.25] samples d_min = +4.3e-3 on the
+    !! 65-node floor scan but is not star-convex (dense d_min = -1.25e-2):
+    !! the gate must say 102 at every scan size, and d_min must not depend on it.
+    subroutine test_gate_at_the_floor()
+        real(kind = rk), parameter :: CORNER(5) = [0.95_rk, 0.25_rk, 0.1_rk, 0.25_rk, 0.25_rk]
+        integer(kind = ik), parameter :: GRIDS(3) = [65_ik, 129_ik, 2049_ik]
+        type(cassini_geometry_t) :: geometry
+        type(cache_t) :: cache
+        real(kind = rk) :: radii(16), d(3)
+        integer(kind = ik) :: status, j
+        do j = 1_ik, 3_ik
+            call cache_init_s(cache, 5_ik, GRIDS(j), thetas, status)
+            call cache_radius_grid_s(cache, CORNER, radii, status)
+            call assert_int_eq(status, CASSINI_ERROR_NOT_STAR_CONVEX, 'K11 non-star-convex corner -> 102')
+            call cache_geometry_s(cache, CORNER, geometry, status)
+            d(j) = geometry%d_min
+        end do
+        call assert_true(d(1) < 0.0_rk, 'K11 d_min < 0 on the floor scan')
+        call assert_true(maxval(d) - minval(d) <= 1.0e-6_rk, 'K11 d_min independent of the scan size')
+    end subroutine test_gate_at_the_floor
 
 end program cassini_param_breakdown_test

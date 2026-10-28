@@ -763,7 +763,7 @@ contains
             return
         end if
         call curve_on_tables_s(params, res, cache%scan_tab, rho, z, drho_dx, dz_dx)
-        call star_margin_s(res, rho, z, drho_dx, dz_dx, d_min, is_folded)
+        call star_margin_s(params, res, cache%scan_tab%x, rho, z, drho_dx, dz_dx, d_min, is_folded)
         status = SHAPE_VALID
     end subroutine run_margin_s
 
@@ -804,7 +804,7 @@ contains
             return
         end if
         call curve_on_tables_s(params, res, cache%scan_tab, rho, z, drho_dx, dz_dx)
-        call star_margin_s(res, rho, z, drho_dx, dz_dx, d_min, is_folded)
+        call star_margin_s(params, res, cache%scan_tab%x, rho, z, drho_dx, dz_dx, d_min, is_folded)
         call gate_rtheta_s(res, d_min, status)
         if (status /= SHAPE_VALID) return
         call theta_on_scan_s(rho, z, drho_dx, dz_dx, theta_scan, dtheta_dx)

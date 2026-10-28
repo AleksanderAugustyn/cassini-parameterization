@@ -63,7 +63,7 @@ contains
         call test_resolve_s(params, res, status)
         call test_scan_s(params, res, N_SCAN, x, rho, z, drho_dx, dz_dx)
         call theta_on_scan_s(rho, z, drho_dx, dz_dx, theta, dtheta_dx)
-        call star_margin_s(res, rho, z, drho_dx, dz_dx, d_min, is_folded)
+        call star_margin_s(params, res, x, rho, z, drho_dx, dz_dx, d_min, is_folded)
     end subroutine setup_s
 
     !> T1: R(atan2(rho, z)) = hypot(z, rho) at 401 profile nodes.

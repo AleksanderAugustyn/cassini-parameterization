@@ -34,10 +34,9 @@ import numpy.typing as npt
 from ._cdefs import MAX_PARAMS, N_POINTS_FLOOR, N_X_GRID_FLOOR, GeometryC, c_dbl_p, configure
 from ._libloader import load_library
 
-#: Scan resolution of the one-shot functions. The star gate, the fold flag,
-#: the neck search and the R(theta) brackets are sampled on it; at 129 nodes
-#: the sampled gate passes a few lattice shapes whose dense margin is below
-#: the threshold, at 2049 none.
+#: Scan resolution of the one-shot functions. The fold flag, the neck search
+#: and the R(theta) brackets are sampled on it; the star margin is refined
+#: between its nodes, so the gate does not depend on it.
 N_X_GRID_DEFAULT = 2049
 
 _lib: Optional[ctypes.CDLL] = None

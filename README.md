@@ -63,11 +63,13 @@ each tangent line of the profile, d = (rho z_x − z rho_x)/|(rho_x, z_x)|, and
 the R(theta) outputs require min d >= `STAR_CONVEXITY_MARGIN` = 1e-3 (R0
 units). The value is provisional and inclusive by design; `geometry` exports
 `d_min` on every shape that resolves, so a later analysis can pick the value
-from data. The gate is sampled on the scan grid (`n_x_grid`): between scan
-nodes d can dip below its sampled minimum (by up to ~5e-3 at 129 nodes), and
-on the paper's step-0.05 lattice a 129-node scan passes 6 of 26,620 shapes
-whose dense d_min is below the margin, 2 of them not star-convex at all. At
-2049 nodes (the Python default) none. Choose `n_x_grid` accordingly.
+from data. The scan grid (`n_x_grid`) locates the minima of d, and each
+sampled local minimum is then refined by a golden-section search between its
+scan neighbours: between nodes d can dip well below its samples (by 1.7e-2
+on the 65-node floor scan), and a purely sampled gate passes shapes that are
+not star-convex. With the refinement the gate verdict agrees with a
+100,001-node scan on every point of the paper's lattice at alpha2 = 0 and
+±0.1, at 65 and at 129 nodes, and d_min does not depend on `n_x_grid`.
 
 **Numerics.** Volume and centre of mass are Pashkevich's x-integrals by
 Gauss–Legendre on each half of [−1, 1] under x = ±sin²(πt/2), 512 nodes per

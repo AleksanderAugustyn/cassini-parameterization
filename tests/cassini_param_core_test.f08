@@ -24,10 +24,11 @@ program cassini_param_core_test
     call test_margin(GS, 0.95103_rk, 1.0e-4_rk, .false., 'GS')
     call test_margin(SADDLE2, 0.74856_rk, 1.0e-4_rk, .false., 'SADDLE2')
     call test_margin(ASYM, 0.42733_rk, 1.0e-4_rk, .true., 'ASYM')
-    call test_margin(DIMPLED, 0.62747_rk, 1.0e-4_rk, .true., 'DIMPLED')
-    ! TWO_NECKS's minimum of d sits on its 1e-5-deep neck bump, between
-    ! 129-scan nodes: the sampled d_min is 1.6e-3 above the dense one
-    call test_margin(TWO_NECKS, 0.24313_rk, 1.0e-4_rk, .false., 'TWO_NECKS', 2.0e-3_rk)
+    ! d_min is the refined minimum (the plan's 0.62747, 0.24313 and 0.55891
+    ! were 129-node samples; TWO_NECKS's minimum sits between scan nodes on
+    ! its neck bump, 1.6e-3 below its sample)
+    call test_margin(DIMPLED, 0.62734_rk, 1.0e-4_rk, .true., 'DIMPLED')
+    call test_margin(TWO_NECKS, 0.24156_rk, 1.0e-4_rk, .false., 'TWO_NECKS')
     call test_margin(STAR_FAIL, -0.03960_rk, 1.0e-4_rk, .false., 'STAR_FAIL')
     call test_fold_box_folded()
     call test_margin_split()
@@ -106,24 +107,22 @@ contains
         call assert_true(worst <= 1.0e-13_rk, 'C3 polar line: c |r| = R(x)')
     end subroutine test_polar_line
 
-    !> C4: d_min on the 129-node scan and the fold flag; C5: against 20001 nodes.
-    subroutine test_margin(params, d_want, tol, folded, name, sampling_tol)
+    !> C4: d_min (refined) on the 129-node scan and the fold flag; C5: against 20001 nodes.
+    subroutine test_margin(params, d_want, tol, folded, name)
         real(kind = rk), intent(in) :: params(:), d_want, tol
         logical, intent(in) :: folded
         character(len = *), intent(in) :: name
-        real(kind = rk), intent(in), optional :: sampling_tol
         type(resolve_t) :: res
         integer(kind = ik) :: status
-        real(kind = rk) :: d_min, d_dense, sampled
+        real(kind = rk) :: d_min, d_dense
         logical :: is_folded
-        sampled = 1.0e-3_rk
-        if (present(sampling_tol)) sampled = sampling_tol
         call test_resolve_s(params, res, status)
         call margin_s(params, res, 129_ik, d_min, is_folded)
         call assert_abs_close(d_min, d_want, tol, 'C4 d_min ' // name)
         call assert_true(is_folded .eqv. folded, 'C4 is_folded ' // name)
         call margin_s(params, res, 20001_ik, d_dense, is_folded)
-        call assert_true(abs(d_min - d_dense) <= sampled, 'C5 sampled margin vs 20001 ' // name)
+        ! refined at both resolutions: the 129-node margin is the 20001-node one
+        call assert_true(abs(d_min - d_dense) <= 1.0e-6_rk, 'C5 refined margin vs 20001 ' // name)
     end subroutine test_margin
 
     subroutine margin_s(params, res, n, d_min, is_folded)
@@ -134,7 +133,7 @@ contains
         logical, intent(out) :: is_folded
         real(kind = rk) :: x(n), rho(n), z(n), drho_dx(n), dz_dx(n)
         call test_scan_s(params, res, n, x, rho, z, drho_dx, dz_dx)
-        call star_margin_s(res, rho, z, drho_dx, dz_dx, d_min, is_folded)
+        call star_margin_s(params, res, x, rho, z, drho_dx, dz_dx, d_min, is_folded)
     end subroutine margin_s
 
     !> C4: FOLD_BOX folds; separated d_min = 0; the pinch node is skipped.
@@ -146,7 +145,7 @@ contains
         call test_resolve_s(FOLD_BOX, res, status)
         call margin_s(FOLD_BOX, res, 129_ik, d_min, is_folded)
         call assert_true(is_folded, 'C4 is_folded FOLD_BOX')
-        call assert_abs_close(d_min, 0.55891_rk, 1.0e-4_rk, 'C4 d_min FOLD_BOX')
+        call assert_abs_close(d_min, 0.55852_rk, 1.0e-4_rk, 'C4 d_min FOLD_BOX')
         call test_resolve_s(SEPARATED, res, status)
         call margin_s(SEPARATED, res, 129_ik, d_min, is_folded)
         call assert_true(is_zero_f(d_min), 'C4 SEPARATED d_min = 0')

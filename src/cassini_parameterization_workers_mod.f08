@@ -53,6 +53,10 @@ module cassini_parameterization_workers_mod
     real(kind = rk), parameter, public :: NECK_TIE_TOL = 1.0e-12_rk
     !> Bracket width in x at which the root-finds stop.
     real(kind = rk), parameter, public :: X_SOLVE_TOL = 1.0e-14_rk
+    !> Bracket width in x at which the golden-section refinement of the star
+    !! margin stops: d is flat at its minimum, so x is not resolvable beyond
+    !! ~sqrt(epsilon), while d there is already exact to rounding.
+    real(kind = rk), parameter :: MARGIN_X_TOL = 1.0e-9_rk
 
     !> Length of every string returned by status_message.
     integer(kind = ik), parameter, public :: STATUS_MESSAGE_LEN = 64_ik
@@ -192,16 +196,26 @@ contains
         integer(kind = ik), intent(in) :: n_active
         type(tables_t), intent(in) :: tab
         real(kind = rk), intent(out) :: r(:), dr(:)
-        integer(kind = ik) :: j, n
+        integer(kind = ik) :: j
         do j = 1_ik, tab%n_nodes
-            r(j) = 1.0_rk
-            dr(j) = 0.0_rk
-            do n = 1_ik, n_active - 1_ik
-                r(j) = r(j) + params(n + 1_ik) * tab%p(n, j)
-                dr(j) = dr(j) + params(n + 1_ik) * tab%dp(n, j)
-            end do
+            call series_at_node_s(params, n_active, tab, j, r(j), dr(j))
         end do
     end subroutine series_on_tables_s
+
+    !> R and R' at node j of a table (the one summation every table user shares).
+    pure subroutine series_at_node_s(params, n_active, tab, j, r, dr)
+        real(kind = rk), intent(in) :: params(:)
+        integer(kind = ik), intent(in) :: n_active, j
+        type(tables_t), intent(in) :: tab
+        real(kind = rk), intent(out) :: r, dr
+        integer(kind = ik) :: n
+        r = 1.0_rk
+        dr = 0.0_rk
+        do n = 1_ik, n_active - 1_ik
+            r = r + params(n + 1_ik) * tab%p(n, j)
+            dr = dr + params(n + 1_ik) * tab%dp(n, j)
+        end do
+    end subroutine series_at_node_s
 
     !> R and R' at one x, Legendre values evaluated on the spot (the poles,
     !! the equator and the root-finds).
@@ -418,14 +432,27 @@ contains
     pure subroutine cosine_nodes_s(n, x)
         integer(kind = ik), intent(in) :: n
         real(kind = rk), intent(out) :: x(n)
-        integer(kind = ik) :: j, half
-        half = n / 2_ik
-        do j = 0_ik, half - 1_ik
-            x(j + 1_ik) = cos(PI_C * real(j, rk) / real(n - 1_ik, rk))
-            x(n - j) = -x(j + 1_ik)
+        integer(kind = ik) :: j
+        do j = 1_ik, n
+            x(j) = cosine_node_f(n, j)
         end do
-        if (mod(n, 2_ik) == 1_ik) x(half + 1_ik) = 0.0_rk
     end subroutine cosine_nodes_s
+
+    !> Node j (1-based) of `cosine_nodes_s(n)`.
+    pure function cosine_node_f(n, j) result(x)
+        integer(kind = ik), intent(in) :: n, j
+        real(kind = rk) :: x
+        integer(kind = ik) :: k, half
+        k = j - 1_ik
+        half = n / 2_ik
+        if (k < half) then
+            x = cos(PI_C * real(k, rk) / real(n - 1_ik, rk))
+        else if (mod(n, 2_ik) == 1_ik .and. k == half) then
+            x = 0.0_rk
+        else
+            x = -cos(PI_C * real(n - 1_ik - k, rk) / real(n - 1_ik, rk))
+        end if
+    end function cosine_node_f
 
     !===========================================================================
     ! RESOLVE
@@ -552,9 +579,14 @@ contains
         type(resolve_t), intent(in) :: res
         type(tables_t), intent(in) :: tab
         real(kind = rk), intent(out) :: rho(:), z(:), drho_dx(:), dz_dx(:)
-        real(kind = rk) :: r(tab%n_nodes), dr(tab%n_nodes)
-        call series_on_tables_s(params, res%n_active, tab, r, dr)
-        call lemniscate_nodes_s(tab%x, r, dr, res%eps, rho, z, drho_dx, dz_dx)
+        real(kind = rk) :: r, dr
+        integer(kind = ik) :: j
+        ! node by node: no work array of the caller's size (Release builds put
+        ! automatic arrays on the stack)
+        do j = 1_ik, tab%n_nodes
+            call series_at_node_s(params, res%n_active, tab, j, r, dr)
+            call lemniscate_point_s(tab%x(j), r, dr, res%eps, rho(j), z(j), drho_dx(j), dz_dx(j))
+        end do
         rho = rho / res%c
         z = z / res%c - res%z_shift
         drho_dx = drho_dx / res%c
@@ -568,31 +600,130 @@ contains
     !! interior node off the axis (rho > 0: the poles, a separated shape's
     !! x = 0 tip and the pinch point are on the axis and skipped; the pinch
     !! point also has hypot = 0). d > 0 everywhere is monotone theta(x), i.e.
-    !! star-convexity. d_min is the minimum over the evaluated nodes, and 0 for
-    !! a separated shape, where it is meaningless. is_folded: any interior
-    !! off-axis node with dz_dx <= 0 (rho(z) multi-valued; a polar dimple).
-    pure subroutine star_margin_s(res, rho, z, drho_dx, dz_dx, d_min, is_folded)
+    !! star-convexity.
+    !!
+    !! Between scan nodes d can dip below its sampled minimum (by 1.7e-2 on
+    !! the 65-node floor scan, where the sampled gate passed shapes that are
+    !! not star-convex). So every sampled local minimum of d is refined by a
+    !! golden-section search for the minimum of d(x) between its two scan
+    !! neighbours (`refined_margin_f`, analytic d, no derivatives of d).
+    !! d_min is the smallest refined value: over the paper's lattice at
+    !! alpha2 = 0, +-0.1 its gate verdict agrees with a 100,001-node scan on
+    !! every point at 65 and 129 nodes. d_min is 0 for a separated shape,
+    !! where it is meaningless. is_folded: any interior off-axis scan node
+    !! with dz_dx <= 0 (rho(z) multi-valued; a polar dimple).
+    !!
+    !! @param[in] x  The scan's nodes (the table's x), descending
+    pure subroutine star_margin_s(params, res, x, rho, z, drho_dx, dz_dx, d_min, is_folded)
+        real(kind = rk), intent(in) :: params(:)
         type(resolve_t), intent(in) :: res
-        real(kind = rk), intent(in) :: rho(:), z(:), drho_dx(:), dz_dx(:)
+        real(kind = rk), intent(in) :: x(:), rho(:), z(:), drho_dx(:), dz_dx(:)
         real(kind = rk), intent(out) :: d_min
         logical, intent(out) :: is_folded
-        real(kind = rk) :: h, d
-        integer(kind = ik) :: j
-        logical :: first
+        real(kind = rk) :: d_left, d_here, d_right
+        integer(kind = ik) :: j, n
+        logical :: first, ok_left, ok_here, ok_right
         d_min = 0.0_rk
         is_folded = .false.
         first = .true.
-        do j = 2_ik, size(rho, kind = ik) - 1_ik
-            if (.not. (rho(j) > 0.0_rk)) cycle
-            if (.not. (dz_dx(j) > 0.0_rk)) is_folded = .true.
-            h = hypot(dz_dx(j), drho_dx(j))
-            if (.not. (h > 0.0_rk)) cycle
-            d = (rho(j) * dz_dx(j) - z(j) * drho_dx(j)) / h
-            if (first .or. d < d_min) d_min = d
+        n = size(rho, kind = ik)
+        do j = 2_ik, n - 1_ik
+            if (rho(j) > 0.0_rk .and. .not. (dz_dx(j) > 0.0_rk)) is_folded = .true.
+            call node_distance_s(rho(j), z(j), drho_dx(j), dz_dx(j), d_here, ok_here)
+            if (.not. ok_here) cycle
+            if (first .or. d_here < d_min) d_min = d_here
             first = .false.
         end do
-        if (res%is_separated) d_min = 0.0_rk
+        if (res%is_separated) then
+            d_min = 0.0_rk
+            return
+        end if
+        do j = 2_ik, n - 1_ik
+            call node_distance_s(rho(j), z(j), drho_dx(j), dz_dx(j), d_here, ok_here)
+            if (.not. ok_here) cycle
+            ok_left = .false.
+            ok_right = .false.
+            if (j > 2_ik) call node_distance_s(rho(j - 1_ik), z(j - 1_ik), drho_dx(j - 1_ik), &
+                    dz_dx(j - 1_ik), d_left, ok_left)
+            if (j < n - 1_ik) call node_distance_s(rho(j + 1_ik), z(j + 1_ik), drho_dx(j + 1_ik), &
+                    dz_dx(j + 1_ik), d_right, ok_right)
+            if (ok_left) then
+                if (d_left < d_here) cycle
+            end if
+            if (ok_right) then
+                if (d_right < d_here) cycle
+            end if
+            d_min = min(d_min, refined_margin_f(params, res, x(j + 1_ik), x(j - 1_ik)))
+        end do
     end subroutine star_margin_s
+
+    !> d at one scan node, and whether it is evaluated (off the axis, hypot > 0).
+    pure subroutine node_distance_s(rho, z, drho_dx, dz_dx, d, ok)
+        real(kind = rk), intent(in) :: rho, z, drho_dx, dz_dx
+        real(kind = rk), intent(out) :: d
+        logical, intent(out) :: ok
+        real(kind = rk) :: h
+        d = 0.0_rk
+        h = hypot(dz_dx, drho_dx)
+        ok = rho > 0.0_rk .and. h > 0.0_rk
+        if (ok) d = (rho * dz_dx - z * drho_dx) / h
+    end subroutine node_distance_s
+
+    !> The minimum of d(x) on [lo, hi] by golden-section search to
+    !! MARGIN_X_TOL in x (interior points only; the ends are scan nodes the
+    !! caller has already sampled).
+    pure function refined_margin_f(params, res, lo, hi) result(d_min)
+        real(kind = rk), intent(in) :: params(:)
+        type(resolve_t), intent(in) :: res
+        real(kind = rk), intent(in) :: lo, hi
+        real(kind = rk) :: d_min
+        real(kind = rk), parameter :: GOLDEN = 0.6180339887498949_rk
+        integer(kind = ik), parameter :: MAX_ITER = 100_ik
+        real(kind = rk) :: a, b, c, e, fc, fe
+        integer(kind = ik) :: iter
+        a = lo
+        b = hi
+        c = b - GOLDEN * (b - a)
+        e = a + GOLDEN * (b - a)
+        fc = distance_at_f(params, res, c)
+        fe = distance_at_f(params, res, e)
+        do iter = 1_ik, MAX_ITER
+            if (b - a <= MARGIN_X_TOL) exit
+            if (fc < fe) then
+                b = e
+                e = c
+                fe = fc
+                c = b - GOLDEN * (b - a)
+                fc = distance_at_f(params, res, c)
+            else
+                a = c
+                c = e
+                fc = fe
+                e = a + GOLDEN * (b - a)
+                fe = distance_at_f(params, res, e)
+            end if
+        end do
+        d_min = min(fc, fe)
+    end function refined_margin_f
+
+    !> d at one x of the final-frame curve; huge where it is undefined (the
+    !! pinch point, hypot = 0).
+    pure function distance_at_f(params, res, x) result(d)
+        real(kind = rk), intent(in) :: params(:)
+        type(resolve_t), intent(in) :: res
+        real(kind = rk), intent(in) :: x
+        real(kind = rk) :: d
+        real(kind = rk) :: r, dr, rho, z, drho_dx, dz_dx, h
+        call series_at_s(params, res%n_active, x, r, dr)
+        call lemniscate_point_s(x, r, dr, res%eps, rho, z, drho_dx, dz_dx)
+        rho = rho / res%c
+        z = z / res%c - res%z_shift
+        drho_dx = drho_dx / res%c
+        dz_dx = dz_dx / res%c
+        h = hypot(dz_dx, drho_dx)
+        d = huge(1.0_rk)
+        if (h > 0.0_rk) d = (rho * dz_dx - z * drho_dx) / h
+    end function distance_at_f
 
     !> The neck (spec "Neck") from a final-frame scan rho on scan_tab's nodes.
     !!
@@ -765,26 +896,40 @@ contains
         type(resolve_t), intent(in) :: res
         integer(kind = ik), intent(in) :: n
         real(kind = rk), intent(out) :: x(n), lobe_sign(n)
-        integer(kind = ik) :: j, m1, m2
+        integer(kind = ik) :: j
+        do j = 1_ik, n
+            call profile_node_s(res, n, j, x(j), lobe_sign(j))
+        end do
+    end subroutine profile_nodes_s
+
+    !> Node j (1-based) of `profile_nodes_s(res, n)`.
+    pure subroutine profile_node_s(res, n, j, x, lobe_sign)
+        type(resolve_t), intent(in) :: res
+        integer(kind = ik), intent(in) :: n, j
+        real(kind = rk), intent(out) :: x, lobe_sign
+        integer(kind = ik) :: m1, m2, k
         if (res%is_pinched .or. res%is_separated) then
             m1 = (n + 1_ik) / 2_ik
             m2 = n - m1
-            do j = 0_ik, m1 - 1_ik
-                x(j + 1_ik) = cos(PI_C / 2.0_rk * real(j, rk) / real(max(m1 - 1_ik, 1_ik), rk))
-            end do
-            do j = 0_ik, m2 - 1_ik
-                x(m1 + 1_ik + j) = -cos(PI_C / 2.0_rk * real(m2 - 1_ik - j, rk) &
-                        / real(max(m2 - 1_ik, 1_ik), rk))
-            end do
-            x(m1) = 0.0_rk
-            x(m1 + 1_ik) = 0.0_rk
-            lobe_sign(1:m1) = 1.0_rk
-            lobe_sign(m1 + 1_ik:) = -1.0_rk
+            if (j < m1) then
+                x = cos(PI_C / 2.0_rk * real(j - 1_ik, rk) / real(max(m1 - 1_ik, 1_ik), rk))
+                lobe_sign = 1.0_rk
+            else if (j == m1) then
+                x = 0.0_rk
+                lobe_sign = 1.0_rk
+            else if (j == m1 + 1_ik) then
+                x = 0.0_rk
+                lobe_sign = -1.0_rk
+            else
+                k = j - m1 - 1_ik
+                x = -cos(PI_C / 2.0_rk * real(m2 - 1_ik - k, rk) / real(max(m2 - 1_ik, 1_ik), rk))
+                lobe_sign = -1.0_rk
+            end if
         else
-            call cosine_nodes_s(n, x)
+            x = cosine_node_f(n, j)
             lobe_sign = merge(1.0_rk, -1.0_rk, x >= 0.0_rk)
         end if
-    end subroutine profile_nodes_s
+    end subroutine profile_node_s
 
     !> The parametric profile (z, rho, drho/dz) in the final frame on
     !! `profile_nodes_s`, north pole first, z descending except where the
@@ -797,15 +942,17 @@ contains
         type(resolve_t), intent(in) :: res
         integer(kind = ik), intent(in) :: n
         real(kind = rk), intent(out) :: z(:), rho(:), drho_dz(:)
-        real(kind = rk) :: x(n), lobe_sign(n), r, dr, rb, zb, drb, dzb
+        real(kind = rk) :: x, lobe_sign, r, dr, rb, zb, drb, dzb
         integer(kind = ik) :: j
         logical :: tip
-        call profile_nodes_s(res, n, x, lobe_sign)
+        ! node by node: no work array of the caller's size (Release builds put
+        ! automatic arrays on the stack)
         do j = 1_ik, n
-            call series_at_s(params, res%n_active, x(j), r, dr)
-            call lemniscate_point_s(x(j), r, dr, res%eps, rb, zb, drb, dzb)
-            tip = (res%is_pinched .or. res%is_separated) .and. .not. (abs(x(j)) > 0.0_rk)
-            if (tip) zb = lobe_sign(j) * abs(zb)
+            call profile_node_s(res, n, j, x, lobe_sign)
+            call series_at_s(params, res%n_active, x, r, dr)
+            call lemniscate_point_s(x, r, dr, res%eps, rb, zb, drb, dzb)
+            tip = (res%is_pinched .or. res%is_separated) .and. .not. (abs(x) > 0.0_rk)
+            if (tip) zb = lobe_sign * abs(zb)
             rho(j) = rb / res%c
             z(j) = zb / res%c - res%z_shift
             if (j == 1_ik .or. j == n .or. tip .or. .not. (abs(dzb) > 0.0_rk)) then
