@@ -123,6 +123,7 @@ if (CASSINI_PARAM_BUILD_TESTS)
 add_library(cassini_param_test_utils STATIC
         tests/test_utils_mod.f08
         tests/cassini_test_fixtures_mod.f08
+        tests/cassini_test_reference_mod.f08
 )
 target_link_libraries(cassini_param_test_utils
         PUBLIC cassini_parameterization fortran_foundations
@@ -132,7 +133,7 @@ set_target_properties(cassini_param_test_utils PROPERTIES
 target_include_directories(cassini_param_test_utils PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/mod_files_tests>)
 
-set(CASSINI_PARAM_TEST_SUITES status)
+set(CASSINI_PARAM_TEST_SUITES status epsilon)
 foreach (suite IN LISTS CASSINI_PARAM_TEST_SUITES)
     add_executable(cassini_param_${suite}_test tests/cassini_param_${suite}_test.f08)
     target_link_libraries(cassini_param_${suite}_test PRIVATE
