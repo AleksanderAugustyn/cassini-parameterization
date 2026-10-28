@@ -59,8 +59,9 @@ contains
         call assert_true(worst <= 1.0e-14_rk, 'C1 sphere rho^2 = 1 - z^2')
         call assert_true(is_zero_f(rho(1)) .and. is_zero_f(rho(101)), 'C1 sphere pole rho = 0')
         call assert_true(is_zero_f(drho_dz(1)) .and. is_zero_f(drho_dz(101)), 'C1 sphere pole drho_dz = 0')
-        call assert_abs_close(z(1), 1.0_rk, 1.0e-15_rk, 'C1 sphere z(1) = 1')
-        call assert_abs_close(z(101), -1.0_rk, 1.0e-15_rk, 'C1 sphere z(101) = -1')
+        ! 2e-15: c carries the 512-node quadrature's summation (5 ulps in Debug)
+        call assert_abs_close(z(1), 1.0_rk, 2.0e-15_rk, 'C1 sphere z(1) = 1')
+        call assert_abs_close(z(101), -1.0_rk, 2.0e-15_rk, 'C1 sphere z(101) = -1')
         call assert_true(descending, 'C1 sphere z descends')
     end subroutine test_sphere_profile
 

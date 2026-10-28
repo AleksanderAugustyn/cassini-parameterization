@@ -5,7 +5,8 @@ program cassini_param_reference_test
     use precision_utilities_mod, only: ik, rk
     use mathematical_and_physical_constants_mod, only: PI_C
     use cassini_parameterization_workers_mod, only: resolve_t, tables_t, theta_on_scan_s, &
-            radius_at_thetas_s, quadrupole_f, quadrature_nodes_s, build_tables_s, &
+            radius_at_thetas_s, quadrupole_f, quadrature_nodes_s, build_tables_s, epsilon_f, &
+            classification_numbers_s, &
             CASSINI_N_GL_HALF, CASSINI_MAX_ORDER
     use cassini_test_fixtures_mod, only: SPHERE, BARE_05, BARE_095, OBLATE, GS, SADDLE1, SD_MIN, &
             SADDLE2, ASYM, DIMPLED, FOLD_BOX, TWO_NECKS
@@ -38,6 +39,7 @@ program cassini_param_reference_test
     call test_plain_gl(BARE_05, 'BARE_05')
     call test_plain_gl(SADDLE2, 'SADDLE2')
     call test_band()
+    call test_toroidal_band()
     call test_summary()
 
 contains
@@ -134,5 +136,56 @@ contains
         call assert_true(worst_v <= 1.0e-12_rk, 'F5 near-pinch band volume')
         call assert_true(worst_z <= 1.0e-12_rk, 'F5 near-pinch band centre of mass')
     end subroutine test_band
+
+    !> F6: the quadrature toward the toroidal boundary, where p vanishes at
+    !! x = +-1: an asymmetric box shape (alpha2 = 0.1, the sweep's worst) with
+    !! alpha tuned so R(1)^2 + s = delta, and the bare oval at alpha = -1 + delta,
+    !! delta in [1e-12, 1e-1], against panels graded toward both ends.
+    subroutine test_toroidal_band()
+        real(kind = rk), parameter :: TAIL(5) = [0.0_rk, -0.25_rk, 0.1_rk, -0.25_rk, -0.25_rk]
+        type(resolve_t) :: res
+        integer(kind = ik) :: status, k
+        real(kind = rk) :: params(5), bare(1), vbar, zm, worst_asym, worst_bare, delta
+        worst_asym = 0.0_rk
+        worst_bare = 0.0_rk
+        do k = 0_ik, 60_ik
+            delta = 10.0_rk**(-1.0_rk - 11.0_rk * real(k, rk) / 60.0_rk)
+            params = TAIL
+            params(1) = alpha_for_pole_f(TAIL, delta)
+            call test_resolve_s(params, res, status)
+            call reference_graded_volume_s(params, res%n_active, res%eps, 64_ik, vbar, zm)
+            worst_asym = max(worst_asym, abs(FOUR_THIRDS_PI * res%c**3 / vbar - 1.0_rk))
+            bare(1) = -1.0_rk + delta
+            call test_resolve_s(bare, res, status)
+            call reference_graded_volume_s(bare, res%n_active, res%eps, 64_ik, vbar, zm)
+            worst_bare = max(worst_bare, abs(FOUR_THIRDS_PI * res%c**3 / vbar - 1.0_rk))
+        end do
+        write(*, '(A,2ES10.2)') 'F6 toroidal band worst |dV/V| asymmetric, bare: ', worst_asym, worst_bare
+        call assert_true(worst_asym <= 1.0e-10_rk, 'F6 near-toroidal asymmetric volume')
+        call assert_true(worst_bare <= 1.0e-8_rk, 'F6 near-toroidal bare volume (conditioning goes with the pole)')
+    end subroutine test_toroidal_band
+
+    !> alpha with R(1)^2 + s = target on the given tail, by bisection.
+    function alpha_for_pole_f(tail, target) result(alpha)
+        real(kind = rk), intent(in) :: tail(5), target
+        real(kind = rk) :: alpha
+        real(kind = rk) :: lo, hi, q(5), eps, r_plus, r_minus, r_zero, pole_plus, pole_minus, equator
+        integer(kind = ik) :: it
+        lo = -1.0_rk
+        hi = 1.0_rk
+        q = tail
+        do it = 1_ik, 200_ik
+            alpha = 0.5_rk * (lo + hi)
+            q(1) = alpha
+            eps = epsilon_f(q, 5_ik)
+            call classification_numbers_s(q, 5_ik, eps, r_plus, r_minus, r_zero, pole_plus, pole_minus, equator)
+            if (pole_plus > target) then
+                hi = alpha
+            else
+                lo = alpha
+            end if
+        end do
+        alpha = hi
+    end function alpha_for_pole_f
 
 end program cassini_param_reference_test

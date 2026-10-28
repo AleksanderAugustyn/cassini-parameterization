@@ -21,6 +21,7 @@ module cassini_test_reference_mod
     public :: test_resolve_s
     public :: reference_graded_volume_s
     public :: gl_thetas_s
+    public :: panel_thetas_s
     public :: reference_theta_volume_s
     public :: reference_theta_q2_f
     public :: test_scan_s
@@ -162,29 +163,32 @@ contains
         zm_raw = f1 / f0
     end subroutine reference_gl_volume_s
 
-    !> Raw-frame Vbar and zm_raw by plain Gauss-Legendre in x (no t
-    !! substitution) on geometrically graded panels per half: breakpoints 0,
-    !! 1e-14, 1e-13, ..., 1e-1, 1, n_panel nodes each. The grading resolves
-    !! the near-pinch structure at x = 0 without the library's substitution.
+    !> Raw-frame Vbar and zm_raw by plain Gauss-Legendre in x (no
+    !! substitution) on geometrically graded panels per half, graded toward
+    !! both ends: breakpoints 0, 1e-14, ..., 1e-1 and 1 - 1e-1, ..., 1 - 1e-14,
+    !! 1, n_panel nodes each. The grading resolves the near-pinch structure at
+    !! x = 0 and the near-toroidal structure at x = +-1 without the library's
+    !! substitution.
     subroutine reference_graded_volume_s(params, n_active, s, n_panel, vbar, zm_raw)
         real(kind = rk), intent(in) :: params(:)
         integer(kind = ik), intent(in) :: n_active, n_panel
         real(kind = rk), intent(in) :: s
         real(kind = rk), intent(out) :: vbar, zm_raw
-        real(kind = rk) :: nodes(n_panel), weights(n_panel), edges(16)
+        real(kind = rk) :: nodes(n_panel), weights(n_panel), edges(30)
         real(kind = rk) :: x, w, r, dr, rho, z, drho_dx, dz_dx, f0, f1, side
         integer(kind = ik) :: j, k, half
         call compute_gauss_legendre_quadrature_s(n_panel, nodes, weights)
         edges(1) = 0.0_rk
         do k = 2_ik, 15_ik
             edges(k) = 10.0_rk**(k - 16_ik)
+            edges(31_ik - k) = 1.0_rk - edges(k)
         end do
-        edges(16) = 1.0_rk
+        edges(30) = 1.0_rk
         f0 = 0.0_rk
         f1 = 0.0_rk
         do half = 1_ik, 2_ik
             side = merge(1.0_rk, -1.0_rk, half == 1_ik)
-            do k = 1_ik, 15_ik
+            do k = 1_ik, 29_ik
                 do j = 1_ik, n_panel
                     x = side * (edges(k) + (edges(k + 1_ik) - edges(k)) * (nodes(j) + 1.0_rk) / 2.0_rk)
                     w = weights(j) * (edges(k + 1_ik) - edges(k)) / 2.0_rk
@@ -207,6 +211,27 @@ contains
         thetas = PI_C * (thetas + 1.0_rk) / 2.0_rk
         weights = PI_C * weights / 2.0_rk
     end subroutine gl_thetas_s
+
+    !> Composite Gauss-Legendre thetas: m nodes on each panel between
+    !! consecutive breakpoints (ascending, first 0, last pi). Breakpoints at
+    !! theta(x_k) of a cosine scan crowd where R(theta) turns fast (a tangent
+    !! line passing close to the origin), which a uniform theta rule cannot
+    !! resolve near the star margin.
+    subroutine panel_thetas_s(breaks, m, thetas, weights)
+        real(kind = rk), intent(in) :: breaks(:)
+        integer(kind = ik), intent(in) :: m
+        real(kind = rk), intent(out) :: thetas(:), weights(:)
+        real(kind = rk) :: nodes(m), w(m), half
+        integer(kind = ik) :: k, j
+        call compute_gauss_legendre_quadrature_s(m, nodes, w)
+        do k = 1_ik, size(breaks, kind = ik) - 1_ik
+            half = (breaks(k + 1_ik) - breaks(k)) / 2.0_rk
+            do j = 1_ik, m
+                thetas((k - 1_ik) * m + j) = breaks(k) + half * (nodes(j) + 1.0_rk)
+                weights((k - 1_ik) * m + j) = half * w(j)
+            end do
+        end do
+    end subroutine panel_thetas_s
 
     !> Final-frame volume and centre of mass from R(theta) alone:
     !! V = 2 pi/3 int R^3 sin, zcm = pi/(2V) int R^4 sin cos (an integration

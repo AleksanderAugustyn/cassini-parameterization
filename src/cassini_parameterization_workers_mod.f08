@@ -27,12 +27,14 @@ module cassini_parameterization_workers_mod
     !---------------------------------------------------------------------------
     ! Grids and floors
     !---------------------------------------------------------------------------
-    !> Gauss-Legendre nodes in t per half of [-1, 1] (x = +-t^2). Measured
-    !! against graded panels in x over 1 - alpha in +-[1e-12, 1e-1], bare and
-    !! asymmetric: worst relative volume error 9.1e-10 at 64 (the band
-    !! 1 - alpha ~ 1e-5 .. 1e-3, where the branch points of p sit at |t| ~
-    !! sqrt(R(0)^2 - s)), 1.5e-11 at 128, 2.3e-13 at 256, 1.6e-14 at 512.
-    integer(kind = ik), parameter, public :: CASSINI_N_GL_HALF = 256_ik
+    !> Gauss-Legendre nodes in t per half of [-1, 1] (x = +-sin^2(pi t/2), see
+    !! `quadrature_nodes_s`). Worst relative volume error against panels in x
+    !! graded toward both ends, over a distance delta in [1e-12, 1e-1] from
+    !! each boundary: near the pinch and the gap 2.0e-14 at 512 (9.0e-13 at
+    !! 256); near the toroidal boundary 5.8e-11 for an asymmetric box shape
+    !! (4.7e-10 at 256) and 2.7e-9 for the bare oval at alpha = -1 + delta, where
+    !! the pole radius and its conditioning both go to zero.
+    integer(kind = ik), parameter, public :: CASSINI_N_GL_HALF = 512_ik
     !> Cosine-spaced nodes on which code 100 (R(x) <= 0) is judged.
     integer(kind = ik), parameter, public :: CASSINI_N_R_CHECK = 1025_ik
     !> Smallest scan grid (star margin, neck search, R(theta) brackets).
@@ -372,15 +374,20 @@ contains
     !===========================================================================
 
     !> Quadrature nodes for x-integrals over [-1, 1]: CASSINI_N_GL_HALF
-    !! Gauss-Legendre nodes in t on [0, 1] per half, mapped to x = +t^2 (north,
-    !! first half of the arrays) and x = -t^2 (south, second half), weight 2 t w.
+    !! Gauss-Legendre nodes in t on [0, 1] per half, mapped to
+    !! x = +sin^2(pi t/2) (north, first half of the arrays) and
+    !! x = -sin^2(pi t/2) (south, second half), weight (pi/2) sin(pi t) w.
     !! The halves are exact mirrors, so a reflection-symmetric integrand's odd
     !! moment sums to exactly 0 when each half is summed on its own.
     !!
-    !! The substitution: the integrands carry |x| and x and the pinch and gap
-    !! live at x = 0, where at the exact pinch A.6's integrand goes like
-    !! sqrt|x|; in t it is smooth, and near the pinch the branch points of p
-    !! move away from the real axis.
+    !! The substitution: p vanishes at the pinch point (x = 0) and at the
+    !! toroidal boundary (x = +-1), and near either the integrands have branch
+    !! points close to the real axis (at the exact pinch A.6's integrand goes
+    !! like sqrt|x|). The map is quadratic at both ends of each half --
+    !! x ~ (pi t/2)^2 near 0 and 1 - |x| ~ (pi (1 - t)/2)^2 near 1 -- which
+    !! makes the pinch smooth and moves both sets of branch points away from
+    !! the real axis. The spec's x = +-t^2 treats only x = 0: near a pole close
+    !! to lifting off it misses by 1.2e-6 (5.6e-5 on the bare oval) at 256.
     !!
     !! The weights are recomputed from the nodes as 2 / ((1 - xi^2) P_n'(xi)^2)
     !! with `compute_legendre_polynomials_s`: the weights of
@@ -398,8 +405,8 @@ contains
             weights(j) = 2.0_rk / ((1.0_rk - nodes(j)) * (1.0_rk + nodes(j)) &
                     * dp(CASSINI_N_GL_HALF + 1_ik)**2)
             t = (nodes(j) + 1.0_rk) / 2.0_rk
-            x(j) = t * t
-            w(j) = t * weights(j)
+            x(j) = sin(PI_C * t / 2.0_rk)**2
+            w(j) = PI_C / 4.0_rk * sin(PI_C * t) * weights(j)
             x(CASSINI_N_GL_HALF + j) = -x(j)
             w(CASSINI_N_GL_HALF + j) = w(j)
         end do

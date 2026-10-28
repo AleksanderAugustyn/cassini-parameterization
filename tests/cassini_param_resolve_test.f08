@@ -99,17 +99,18 @@ contains
                 all(quad_x(CASSINI_N_GL_HALF + 1:) < 0.0_rk), 'V11 north then south')
     end subroutine test_nodes
 
-    !> V1, V2.
+    !> V1, V2. The sphere's c and poles hold to 2e-15: a 512-node half summed
+    !! in order (Debug) lands 5 ulps from 1.
     subroutine test_sphere_and_bare()
         type(resolve_t) :: res
         integer(kind = ik) :: status
         call resolve_fixture_s(SPHERE, res, status)
         call assert_int_eq(status, 0_ik, 'V1 sphere status')
         call assert_abs_close(res%eps, 0.0_rk, 1.0e-15_rk, 'V1 sphere eps')
-        call assert_abs_close(res%c, 1.0_rk, 1.0e-15_rk, 'V1 sphere c')
+        call assert_abs_close(res%c, 1.0_rk, 2.0e-15_rk, 'V1 sphere c')
         call assert_abs_close(res%z_shift, 0.0_rk, 1.0e-15_rk, 'V1 sphere z_shift')
-        call assert_abs_close(res%r_north, 1.0_rk, 1.0e-15_rk, 'V1 sphere r_north')
-        call assert_abs_close(res%r_south, 1.0_rk, 1.0e-15_rk, 'V1 sphere r_south')
+        call assert_abs_close(res%r_north, 1.0_rk, 2.0e-15_rk, 'V1 sphere r_north')
+        call assert_abs_close(res%r_south, 1.0_rk, 2.0e-15_rk, 'V1 sphere r_south')
         call resolve_fixture_s(BARE_05, res, status)
         call assert_abs_close(res%c, 0.887236_rk, 1.0e-5_rk, 'V2 BARE_05 c')
         call assert_abs_close(res%r_north, 1.380404_rk, 1.0e-5_rk, 'V2 BARE_05 r_north')

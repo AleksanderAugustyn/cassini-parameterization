@@ -134,7 +134,7 @@ set_target_properties(cassini_param_test_utils PROPERTIES
 target_include_directories(cassini_param_test_utils PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/mod_files_tests>)
 
-set(CASSINI_PARAM_TEST_SUITES status epsilon map resolve core neck rtheta reference error boundary equivalence statelessness)
+set(CASSINI_PARAM_TEST_SUITES status epsilon map resolve core neck rtheta reference error boundary equivalence statelessness breakdown legacy)
 foreach (suite IN LISTS CASSINI_PARAM_TEST_SUITES)
     add_executable(cassini_param_${suite}_test tests/cassini_param_${suite}_test.f08)
     target_link_libraries(cassini_param_${suite}_test PRIVATE
@@ -143,4 +143,18 @@ foreach (suite IN LISTS CASSINI_PARAM_TEST_SUITES)
             Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/mod_files_tests/${suite})
     add_test(NAME ${suite} COMMAND cassini_param_${suite}_test)
 endforeach ()
+
+# Geometry sweep: Tier A status counts with goldens on the default grid, Tier B
+# volume and round-trip accuracy over every accepted shape; --full and --a2
+# for the spec's other passes. Excluded from the default run (-E geometry_sweep).
+# OpenMP is optional -- serial builds just run longer.
+find_package(OpenMP COMPONENTS Fortran)
+add_executable(cassini_param_geometry_sweep_test tests/cassini_param_geometry_sweep_test.f08)
+target_link_libraries(cassini_param_geometry_sweep_test PRIVATE
+        cassini_parameterization cassini_param_test_utils cassini_parameterization_flags
+        $<$<TARGET_EXISTS:OpenMP::OpenMP_Fortran>:OpenMP::OpenMP_Fortran>)
+set_target_properties(cassini_param_geometry_sweep_test PROPERTIES
+        Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/mod_files_tests/geometry_sweep)
+add_test(NAME geometry_sweep COMMAND cassini_param_geometry_sweep_test)
+set_tests_properties(geometry_sweep PROPERTIES LABELS sweep TIMEOUT 7200)
 endif ()
