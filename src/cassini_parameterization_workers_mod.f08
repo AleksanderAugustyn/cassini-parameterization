@@ -27,9 +27,12 @@ module cassini_parameterization_workers_mod
     !---------------------------------------------------------------------------
     ! Grids and floors
     !---------------------------------------------------------------------------
-    !> Gauss-Legendre nodes in t per half of [-1, 1] (x = +-t^2); conserves the
-    !! bare oval's volume to 1e-13 from eps = 0.95 through the pinch.
-    integer(kind = ik), parameter, public :: CASSINI_N_GL_HALF = 64_ik
+    !> Gauss-Legendre nodes in t per half of [-1, 1] (x = +-t^2). Measured
+    !! against graded panels in x over 1 - alpha in +-[1e-12, 1e-1], bare and
+    !! asymmetric: worst relative volume error 9.1e-10 at 64 (the band
+    !! 1 - alpha ~ 1e-5 .. 1e-3, where the branch points of p sit at |t| ~
+    !! sqrt(R(0)^2 - s)), 1.5e-11 at 128, 2.3e-13 at 256, 1.6e-14 at 512.
+    integer(kind = ik), parameter, public :: CASSINI_N_GL_HALF = 256_ik
     !> Cosine-spaced nodes on which code 100 (R(x) <= 0) is judged.
     integer(kind = ik), parameter, public :: CASSINI_N_R_CHECK = 1025_ik
     !> Smallest scan grid (star margin, neck search, R(theta) brackets).
@@ -122,6 +125,9 @@ module cassini_parameterization_workers_mod
     public :: neck_s
     public :: profile_nodes_s
     public :: profile_s
+    public :: theta_on_scan_s
+    public :: radius_at_theta_s
+    public :: radius_at_thetas_s
 
 contains
 
@@ -802,6 +808,140 @@ contains
             end if
         end do
     end subroutine profile_s
+
+    !===========================================================================
+    ! R(THETA)
+    !===========================================================================
+
+    !> theta(x) = atan2(rho, z) and dtheta/dx = (z drho_dx - rho dz_dx) / (rho^2 + z^2)
+    !! on a final-frame scan (0 where rho = z = 0, the pinch point).
+    pure subroutine theta_on_scan_s(rho, z, drho_dx, dz_dx, theta, dtheta_dx)
+        real(kind = rk), intent(in) :: rho(:), z(:), drho_dx(:), dz_dx(:)
+        real(kind = rk), intent(out) :: theta(:), dtheta_dx(:)
+        real(kind = rk) :: r2
+        integer(kind = ik) :: j
+        do j = 1_ik, size(rho, kind = ik)
+            theta(j) = atan2(rho(j), z(j))
+            r2 = rho(j)**2 + z(j)**2
+            dtheta_dx(j) = 0.0_rk
+            if (r2 > 0.0_rk) dtheta_dx(j) = (z(j) * drho_dx(j) - rho(j) * dz_dx(j)) / r2
+        end do
+    end subroutine theta_on_scan_s
+
+    !> R and dR/dtheta at one theta, by root-finding theta(x) = theta along
+    !! the curve. For a shape that passed the star gate theta(x) decreases
+    !! strictly from pi at x = -1 to 0 at x = 1 (folds included).
+    !!
+    !! theta <= 0 and theta >= pi return the analytic poles with dR/dtheta = 0.
+    !! Otherwise the scan nodes whose theta straddle it bracket x (bisection on
+    !! the scan index) and a safeguarded Newton iteration on theta(x) - theta,
+    !! with the analytic dtheta/dx, runs to X_SOLVE_TOL in x (bisection when a
+    !! step leaves the bracket or dtheta/dx is 0; at most 60 iterations, then
+    !! the bracket midpoint). Then R = hypot(rho, z), dR/dx = (rho rho_x +
+    !! z z_x) / R and dR/dtheta = (dR/dx) / (dtheta/dx); 0 if the root lands on
+    !! a pole node, where dtheta/dx carries the pole convention.
+    !!
+    !! @param[in] x_scan      The scan's nodes, descending
+    !! @param[in] theta_scan  theta on the scan (`theta_on_scan_s`), ascending
+    pure subroutine radius_at_theta_s(params, res, x_scan, theta_scan, theta, r, dr_dtheta)
+        real(kind = rk), intent(in) :: params(:)
+        type(resolve_t), intent(in) :: res
+        real(kind = rk), intent(in) :: x_scan(:), theta_scan(:), theta
+        real(kind = rk), intent(out) :: r, dr_dtheta
+        integer(kind = ik), parameter :: MAX_ITER = 60_ik
+        real(kind = rk) :: x_lo, x_hi, f_lo, f_hi, x, x_new, f, th, dth, rho, z, drho_dx, dz_dx, dr_dx
+        integer(kind = ik) :: lo, hi, mid, iter
+        logical :: converged
+
+        dr_dtheta = 0.0_rk
+        if (theta <= 0.0_rk) then
+            r = res%r_north
+            return
+        end if
+        if (theta >= PI_C) then
+            r = res%r_south
+            return
+        end if
+
+        lo = 1_ik
+        hi = size(theta_scan, kind = ik)
+        do while (hi - lo > 1_ik)
+            mid = (lo + hi) / 2_ik
+            if (theta_scan(mid) <= theta) then
+                lo = mid
+            else
+                hi = mid
+            end if
+        end do
+        ! theta decreases in x: f = theta(x) - theta is >= 0 at x_lo and <= 0 at x_hi
+        x_lo = x_scan(hi)
+        f_lo = theta_scan(hi) - theta
+        x_hi = x_scan(lo)
+        f_hi = theta_scan(lo) - theta
+
+        x = x_hi
+        if (abs(f_hi) > 0.0_rk) x = x_lo + f_lo * (x_hi - x_lo) / (f_lo - f_hi)
+        converged = .false.
+        do iter = 1_ik, MAX_ITER
+            call theta_point_s(params, res, x, th, dth, rho, z, drho_dx, dz_dx)
+            f = th - theta
+            if (.not. (abs(f) > 0.0_rk)) then
+                converged = .true.
+                exit
+            end if
+            if (f > 0.0_rk) then
+                x_lo = x
+            else
+                x_hi = x
+            end if
+            x_new = 0.5_rk * (x_lo + x_hi)
+            if (abs(dth) > 0.0_rk) x_new = x - f / dth
+            if (.not. (x_new > x_lo .and. x_new < x_hi)) x_new = 0.5_rk * (x_lo + x_hi)
+            if (abs(x_new - x) <= X_SOLVE_TOL .or. x_hi - x_lo <= X_SOLVE_TOL) then
+                x = x_new
+                converged = .true.
+                exit
+            end if
+            x = x_new
+        end do
+        if (.not. converged) x = 0.5_rk * (x_lo + x_hi)
+
+        call theta_point_s(params, res, x, th, dth, rho, z, drho_dx, dz_dx)
+        r = hypot(rho, z)
+        dr_dx = (rho * drho_dx + z * dz_dx) / r
+        if (abs(dth) > 0.0_rk) dr_dtheta = dr_dx / dth
+    end subroutine radius_at_theta_s
+
+    !> `radius_at_theta_s` over a set of thetas.
+    pure subroutine radius_at_thetas_s(params, res, x_scan, theta_scan, thetas, radii, dr_dtheta)
+        real(kind = rk), intent(in) :: params(:)
+        type(resolve_t), intent(in) :: res
+        real(kind = rk), intent(in) :: x_scan(:), theta_scan(:), thetas(:)
+        real(kind = rk), intent(out) :: radii(:), dr_dtheta(:)
+        integer(kind = ik) :: k
+        do k = 1_ik, size(thetas, kind = ik)
+            call radius_at_theta_s(params, res, x_scan, theta_scan, thetas(k), radii(k), dr_dtheta(k))
+        end do
+    end subroutine radius_at_thetas_s
+
+    !> The final-frame curve at one x with theta and dtheta/dx.
+    pure subroutine theta_point_s(params, res, x, theta, dtheta_dx, rho, z, drho_dx, dz_dx)
+        real(kind = rk), intent(in) :: params(:)
+        type(resolve_t), intent(in) :: res
+        real(kind = rk), intent(in) :: x
+        real(kind = rk), intent(out) :: theta, dtheta_dx, rho, z, drho_dx, dz_dx
+        real(kind = rk) :: r, dr, r2
+        call series_at_s(params, res%n_active, x, r, dr)
+        call lemniscate_point_s(x, r, dr, res%eps, rho, z, drho_dx, dz_dx)
+        rho = rho / res%c
+        z = z / res%c - res%z_shift
+        drho_dx = drho_dx / res%c
+        dz_dx = dz_dx / res%c
+        theta = atan2(rho, z)
+        r2 = rho**2 + z**2
+        dtheta_dx = 0.0_rk
+        if (r2 > 0.0_rk) dtheta_dx = (z * drho_dx - rho * dz_dx) / r2
+    end subroutine theta_point_s
 
     !> The two radicands without cancellation. Q_big = p + |R^2 u + s| is a
     !! same-sign sum; Q_small = 4 R^4 x^2 (1 - x^2) / Q_big from the product

@@ -18,7 +18,7 @@ program cassini_param_status_test
     call assert_int_eq(int(CASSINI_ERROR_SEPARATED), 103, 'separated = 103')
     call assert_int_eq(int(CASSINI_MAX_PARAMS), 21, 'hard cap 21')
     call assert_int_eq(int(CASSINI_MAX_ORDER), 20, 'Legendre orders to 20')
-    call assert_int_eq(int(CASSINI_N_GL_HALF), 64, 'GL order per half')
+    call assert_int_eq(int(CASSINI_N_GL_HALF), 256, 'GL order per half (raised from 64, see the constant)')
     call assert_int_eq(int(CASSINI_N_R_CHECK), 1025, 'R-check grid')
     call assert_int_eq(int(CASSINI_N_X_GRID_FLOOR), 65, 'scan floor')
     call assert_int_eq(int(CASSINI_N_POINTS_FLOOR), 4, 'profile floor')
