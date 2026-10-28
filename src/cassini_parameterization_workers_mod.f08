@@ -729,11 +729,11 @@ contains
     !!
     !! Candidates are the interior local minima of rho (rho(k) < rho(k-1) and
     !! rho(k) <= rho(k+1)); rho = 0 at both poles, so each has a local maximum
-    !! on either side, and a polar dimple creates none. The smallest wins;
-    !! candidates within NECK_TIE_TOL relative tie and the tie goes to the
-    !! larger x (the scan runs north to south, so the first one is kept). The
-    !! winner is refined to the root of d rho_bar/dx between its scan
-    !! neighbours (`neck_root_f`). Pinched and separated shapes:
+    !! on either side, and a polar dimple creates none. Each candidate is
+    !! refined to the root of d rho_bar/dx between its scan neighbours
+    !! (`neck_root_f`), and the smallest refined rho wins; candidates within
+    !! NECK_TIE_TOL relative tie and the tie goes to the larger x (the scan
+    !! runs north to south, so the first one is kept). Pinched and separated shapes:
     !! found, rho_neck = 0, z_neck = -z_shift (the pinch, or the gap's middle).
     !!
     !! @param[out] x_neck  Optional: the lemniscate coordinate of the neck
@@ -746,7 +746,7 @@ contains
         real(kind = rk), intent(out) :: z_neck, rho_neck
         real(kind = rk), intent(out), optional :: x_neck
         real(kind = rk) :: x, r, dr, rb, zb, drb, dzb
-        integer(kind = ik) :: k, best
+        integer(kind = ik) :: k
 
         found = .false.
         z_neck = 0.0_rk
@@ -759,24 +759,21 @@ contains
             return
         end if
 
-        best = 0_ik
+        ! every candidate is refined before ranking: two necks whose sampled
+        ! rho differ by less than the sampling error rank wrongly otherwise
         do k = 2_ik, size(rho, kind = ik) - 1_ik
             if (.not. (rho(k) < rho(k - 1_ik) .and. rho(k) <= rho(k + 1_ik))) cycle
-            if (best == 0_ik) then
-                best = k
-            else if (rho(k) < rho(best) - NECK_TIE_TOL * rho(best)) then
-                best = k
+            x = neck_root_f(params, res, scan_tab%x(k + 1_ik), scan_tab%x(k), scan_tab%x(k - 1_ik))
+            call series_at_s(params, res%n_active, x, r, dr)
+            call lemniscate_point_s(x, r, dr, res%eps, rb, zb, drb, dzb)
+            if (found) then
+                if (.not. (rb / res%c < rho_neck - NECK_TIE_TOL * rho_neck)) cycle
             end if
+            found = .true.
+            rho_neck = rb / res%c
+            z_neck = zb / res%c - res%z_shift
+            if (present(x_neck)) x_neck = x
         end do
-        if (best == 0_ik) return
-
-        x = neck_root_f(params, res, scan_tab%x(best + 1_ik), scan_tab%x(best), scan_tab%x(best - 1_ik))
-        call series_at_s(params, res%n_active, x, r, dr)
-        call lemniscate_point_s(x, r, dr, res%eps, rb, zb, drb, dzb)
-        found = .true.
-        rho_neck = rb / res%c
-        z_neck = zb / res%c - res%z_shift
-        if (present(x_neck)) x_neck = x
     end subroutine neck_s
 
     !> The minimum of rho_bar near a scan minimum at x_mid, scan neighbours

@@ -19,7 +19,9 @@
 !! at 21 profile nodes, x = 0 excluded (<= 1e-12). The maxima are printed.
 !!
 !! Default: step 0.05 at alpha2 = 0 (26,620 points). `--full`: step 0.025
-!! (361,179 points). `--a2 <value>`: alpha2. Goldens apply to the default only.
+!! (361,179 points). `--a2 <value>`: alpha2. Tier A goldens are locked for the
+!! default, `--full`, `--a2 0.1` and `--a2 -0.1`; every pass, named or not,
+!! asserts that the gate misses nothing.
 !! OpenMP is optional; serial builds just run longer.
 program cassini_param_geometry_sweep_test
     use precision_utilities_mod, only: ik, rk
@@ -36,19 +38,22 @@ program cassini_param_geometry_sweep_test
     integer(kind = ik), parameter :: N_THETA = 200_ik, N_PROFILE = 21_ik
     integer(kind = ik), parameter :: N_PANEL_SCAN = 257_ik, N_PER_PANEL = 8_ik
     integer(kind = ik), parameter :: N_B = (N_PANEL_SCAN - 1_ik) * N_PER_PANEL
-    !> Tier A goldens of the default grid: R(theta) statuses 0, 100, 101, 102,
-    !! 103, folded among accepted, neck found, sampled-gate misses. Captured on
-    !! the first green run.
-    integer(kind = ik), parameter :: GOLDEN(8) = [25920_ik, 0_ik, 0_ik, 700_ik, 0_ik, 11493_ik, 12204_ik, 0_ik]
+    !> Tier A goldens: R(theta) statuses 0, 100, 101, 102, 103, folded among
+    !! accepted, neck found, gate misses. Columns: the default grid, --full,
+    !! --a2 0.1, --a2 -0.1.
+    integer(kind = ik), parameter :: GOLDEN(8, 4) = reshape([ &
+            25920_ik, 0_ik, 0_ik, 700_ik, 0_ik, 11493_ik, 12204_ik, 0_ik, &
+            354995_ik, 0_ik, 0_ik, 6184_ik, 0_ik, 154173_ik, 160163_ik, 0_ik, &
+            25732_ik, 0_ik, 0_ik, 888_ik, 0_ik, 10033_ik, 13495_ik, 0_ik, &
+            26070_ik, 0_ik, 0_ik, 550_ik, 0_ik, 13076_ik, 11152_ik, 0_ik], [8, 4])
     integer(kind = ik), parameter :: N_X_DENSE = 2049_ik
 
     type(cache_t) :: cache, dense
     real(kind = rk) :: gl_t(N_THETA), gl_w(N_THETA), step, a2
     real(kind = rk) :: worst_v, worst_z, worst_rt
-    integer(kind = ik) :: counts(8), n_alpha, n_box, ia, ib, status, n_total
-    logical :: default_grid
+    integer(kind = ik) :: counts(8), n_alpha, n_box, ia, ib, status, n_total, golden_column
 
-    call parse_args(step, a2, default_grid)
+    call parse_args(step, a2, golden_column)
     n_alpha = nint(0.95_rk / step, ik) + 1_ik
     n_box = nint(0.5_rk / step, ik) + 1_ik
     n_total = n_alpha * n_box**3
@@ -85,7 +90,12 @@ program cassini_param_geometry_sweep_test
     call assert_true(worst_v <= 1.0e-10_rk, 'Tier B volume')
     call assert_true(worst_z <= 1.0e-10_rk, 'Tier B centre of mass')
     call assert_true(worst_rt <= 1.0e-12_rk, 'Tier B round trip')
-    if (default_grid) call assert_true(all(counts == GOLDEN), 'Tier A counts match the goldens')
+    call assert_int_eq(counts(8), 0_ik, 'Tier A: the refined gate misses nothing')
+    if (golden_column > 0_ik) then
+        call assert_true(all(counts == GOLDEN(:, golden_column)), 'Tier A counts match the goldens')
+    else
+        write(*, '(A)') 'Tier A: no goldens for this pass (counts printed only)'
+    end if
     call test_summary()
 
 contains
@@ -157,14 +167,18 @@ contains
         worst_z = max(worst_z, abs(zcm))
     end subroutine evaluate_shape
 
-    subroutine parse_args(step, a2, default_grid)
+    !> step and alpha2 from the arguments, and the goldens' column for the
+    !! named passes (0: none).
+    subroutine parse_args(step, a2, golden_column)
         real(kind = rk), intent(out) :: step, a2
-        logical, intent(out) :: default_grid
+        integer(kind = ik), intent(out) :: golden_column
         character(len = 64) :: arg
         integer :: i, n
+        logical :: full, has_a2
         step = 0.05_rk
         a2 = 0.0_rk
-        default_grid = .true.
+        full = .false.
+        has_a2 = .false.
         n = command_argument_count()
         i = 1
         do while (i <= n)
@@ -172,18 +186,23 @@ contains
             select case (trim(arg))
             case ('--full')
                 step = 0.025_rk
-                default_grid = .false.
+                full = .true.
             case ('--a2')
                 i = i + 1
                 call get_command_argument(i, arg)
                 read(arg, *) a2
-                default_grid = .false.
+                has_a2 = .true.
             case default
                 write(*, '(A)') 'Usage: cassini_param_geometry_sweep_test [--full] [--a2 <value>]'
                 stop 2
             end select
             i = i + 1
         end do
+        golden_column = 0_ik
+        if (.not. full .and. .not. has_a2) golden_column = 1_ik
+        if (full .and. .not. has_a2) golden_column = 2_ik
+        if (.not. full .and. has_a2 .and. abs(a2 - 0.1_rk) < 1.0e-12_rk) golden_column = 3_ik
+        if (.not. full .and. has_a2 .and. abs(a2 + 0.1_rk) < 1.0e-12_rk) golden_column = 4_ik
     end subroutine parse_args
 
 end program cassini_param_geometry_sweep_test

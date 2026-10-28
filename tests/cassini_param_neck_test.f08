@@ -28,6 +28,7 @@ program cassini_param_neck_test
     call test_refinement(STAR_FAIL, 'STAR_FAIL')
     call test_refinement(FOLD_BOX, 'FOLD_BOX')
     call test_refinement(TWO_NECKS, 'TWO_NECKS')
+    call test_ranked_after_refinement()
     call test_summary()
 
 contains
@@ -154,5 +155,25 @@ contains
         call lemniscate_point_s(x_neck, r, dr, res%eps, rb, zb, drb, dzb)
         call assert_true(abs(drb) <= 1.0e-12_rk, 'N7 drho_bar/dx = 0 at x_neck ' // name)
     end subroutine test_refinement
+
+    !> N8: candidates are ranked by their REFINED rho. Two necks whose sampled
+    !! rho differ by 2e-5 on the 65-node scan: the northern samples narrower,
+    !! the southern refines narrower (0.386437 vs 0.386827). The neck is the
+    !! southern one at every scan size (cross-family compliance review).
+    subroutine test_ranked_after_refinement()
+        real(kind = rk), parameter :: DOUBLE(5) = [0.657054_rk, 0.014275_rk, 0.009004_rk, &
+                0.049565_rk, 0.498834_rk]
+        integer(kind = ik), parameter :: GRIDS(3) = [65_ik, 129_ik, 2049_ik]
+        type(resolve_t) :: res
+        logical :: found
+        real(kind = rk) :: z_neck, rho_neck, x_neck, scan_min
+        integer(kind = ik) :: j
+        do j = 1_ik, 3_ik
+            call neck_on_scan_s(DOUBLE, GRIDS(j), res, found, z_neck, rho_neck, x_neck, scan_min)
+            call assert_true(found, 'N8 found')
+            call assert_abs_close(z_neck, -1.1220019_rk, 1.0e-6_rk, 'N8 the narrower (southern) neck')
+            call assert_abs_close(rho_neck, 0.3864367_rk, 1.0e-6_rk, 'N8 rho_neck')
+        end do
+    end subroutine test_ranked_after_refinement
 
 end program cassini_param_neck_test
