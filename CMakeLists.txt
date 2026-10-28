@@ -158,6 +158,14 @@ set_target_properties(cassini_param_geometry_sweep_test PROPERTIES
 add_test(NAME geometry_sweep COMMAND cassini_param_geometry_sweep_test)
 set_tests_properties(geometry_sweep PROPERTIES LABELS sweep TIMEOUT 7200)
 
+# Golden capture: prints paste-ready Python goldens through the C entries.
+# Not a ctest; the recapture procedure is in the file header.
+add_executable(cassini_param_golden_capture tests/golden_capture.f08)
+target_link_libraries(cassini_param_golden_capture PRIVATE
+        cassini_parameterization cassini_param_test_utils cassini_parameterization_flags)
+set_target_properties(cassini_param_golden_capture PROPERTIES
+        Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/mod_files_tests/capture)
+
 add_executable(cassini_param_c_api_smoke_test tests/c_api_smoke_test.cpp)
 target_link_libraries(cassini_param_c_api_smoke_test PRIVATE cassini_parameterization_cxx)
 add_test(NAME c_api_smoke COMMAND cassini_param_c_api_smoke_test)
