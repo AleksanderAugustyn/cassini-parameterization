@@ -157,4 +157,15 @@ set_target_properties(cassini_param_geometry_sweep_test PROPERTIES
         Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/mod_files_tests/geometry_sweep)
 add_test(NAME geometry_sweep COMMAND cassini_param_geometry_sweep_test)
 set_tests_properties(geometry_sweep PROPERTIES LABELS sweep TIMEOUT 7200)
+
+add_executable(cassini_param_c_api_smoke_test tests/c_api_smoke_test.cpp)
+target_link_libraries(cassini_param_c_api_smoke_test PRIVATE cassini_parameterization_cxx)
+add_test(NAME c_api_smoke COMMAND cassini_param_c_api_smoke_test)
+
+# Contract family 3, concurrency: many threads computing on ONE shared cache.
+find_package(Threads REQUIRED)
+add_executable(cassini_param_thread_stress_test tests/thread_stress_test.cpp)
+target_link_libraries(cassini_param_thread_stress_test PRIVATE
+        cassini_parameterization_cxx Threads::Threads)
+add_test(NAME thread_stress COMMAND cassini_param_thread_stress_test)
 endif ()
