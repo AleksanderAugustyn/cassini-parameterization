@@ -69,6 +69,8 @@ module cassini_parameterization_workers_mod
     public :: series_at_s
     public :: epsilon_f
     public :: classification_numbers_s
+    public :: lemniscate_point_s
+    public :: lemniscate_nodes_s
 
 contains
 
@@ -201,5 +203,133 @@ contains
         pole_minus = r_minus**2 + s
         equator = r_zero**2 - s
     end subroutine classification_numbers_s
+
+    !===========================================================================
+    ! LEMNISCATE MAP
+    !===========================================================================
+
+    !> Raw coordinates (rho_bar, z_bar) and their TOTAL x-derivatives at one x
+    !! for given R, R' = dR/dx and s (eq. 2, A.1-A.5).
+    !!
+    !! With u = 2x^2 - 1, a = R^2 + s u, b = 2 s |x| sqrt(1 - x^2):
+    !!   p = hypot(a, b)                       (never the printed A.5 radicand)
+    !!   rho_bar = sqrt(Q-/2), z_bar = sign(x) sqrt(Q+/2), Q+- = p +- (R^2 u + s),
+    !! the radicands by `radicands_s` (Q_big direct, Q_small from the product
+    !! identity Q+ Q- = 4 R^4 x^2 (1 - x^2)).
+    !!
+    !! Derivatives. The sign test on a and up picks the form: on the pole side
+    !! (a, up of the same sign; a + up is a same-sign sum and Q+ is bounded
+    !! away from 0) A.1 and A.3 are printed and
+    !!   d rho_bar/dR = 2 |x| sqrt(1 - x^2) R (R^2 + 2us) |z_bar| / (p (a + up))
+    !!   d rho_bar/dx = sign(x) (s - p) |z_bar| / (p sqrt(1 - x^2))
+    !! on the equator side (opposite signs; a - up is a same-sign sum and Q- is
+    !! bounded away from 0) A.2 and A.4 are printed and
+    !!   d z_bar/dx = (s + p) rho_bar / (p sqrt(1 - x^2))
+    !!   d z_bar/dR = 2 x sqrt(1 - x^2) R (R^2 + 2us) rho_bar / (p (a - up))
+    !! Each regular form is its printed form with the vanishing radicand and
+    !! bracket rationalized (a +- up = 4 x^2 (1 - x^2) R^2 (R^2 + 2us) / (a -+ up))
+    !! and the common factor cancelled, so no form ever divides a vanishing
+    !! bracket or radicand: the bracket that appears is always the same-sign
+    !! sum, and the rationalized one is folded into the regular forms. The
+    !! d rho_bar/dx form above is A.2 through the same product identity; it is
+    !! finite at a separated tip (x = 0, where A.2 is 0/0 and the profile has
+    !! a kink; sign(0) = +1 gives the north lobe's value).
+    !!
+    !! Conventions: at the pinch point (p = 0) rho_bar = z_bar = 0 and both
+    !! derivatives are 0. At |x| = 1 the partial that diverges (d rho_bar/dx at
+    !! a pole on the axis, a true vertical tangent; d z_bar/dx at a toroidal
+    !! lift-off) is returned as 0; every caller treats the poles by its own
+    !! rule.
+    !!
+    !! @param[in]  x        Lemniscate coordinate in [-1, 1]
+    !! @param[in]  r, dr    R(x) and R'(x)
+    !! @param[in]  s        Squared focal distance (eps in R0 = 1 units)
+    !! @param[out] rho, z   rho_bar, z_bar (raw frame)
+    !! @param[out] drho_dx, dz_dx  Total derivatives along the curve R = R(x)
+    pure subroutine lemniscate_point_s(x, r, dr, s, rho, z, drho_dx, dz_dx)
+        real(kind = rk), intent(in) :: x, r, dr, s
+        real(kind = rk), intent(out) :: rho, z, drho_dx, dz_dx
+
+        real(kind = rk), parameter :: ROOT2 = sqrt(2.0_rk)
+        real(kind = rk) :: one_minus_x2, sq, u, r2, a, up, p, q_plus, q_minus
+        real(kind = rk) :: bracket, dz_x, dz_r, drho_x, drho_r, sign_x
+
+        rho = 0.0_rk
+        z = 0.0_rk
+        drho_dx = 0.0_rk
+        dz_dx = 0.0_rk
+
+        one_minus_x2 = (1.0_rk - x) * (1.0_rk + x)
+        sq = sqrt(max(one_minus_x2, 0.0_rk))
+        u = 2.0_rk * x * x - 1.0_rk
+        r2 = r * r
+        a = r2 + s * u
+        p = hypot(a, 2.0_rk * s * abs(x) * sq)
+        if (.not. (p > 0.0_rk)) return
+
+        call radicands_s(r2, u, s, p, x, one_minus_x2, q_plus, q_minus)
+        rho = sqrt(q_minus / 2.0_rk)
+        z = sign(sqrt(q_plus / 2.0_rk), x)
+        sign_x = sign(1.0_rk, x)
+
+        dz_x = 0.0_rk
+        dz_r = 0.0_rk
+        drho_x = 0.0_rk
+        drho_r = 0.0_rk
+        up = u * p
+        if ((a >= 0.0_rk) .eqv. (up >= 0.0_rk)) then
+            bracket = a + up
+            if (q_plus > 0.0_rk) then
+                dz_x = ROOT2 * abs(x) * r2 * (s + p) / (p * sqrt(q_plus))
+                dz_r = sign_x * r * bracket / (ROOT2 * p * sqrt(q_plus))
+            end if
+            if (abs(bracket) > 0.0_rk) then
+                drho_r = 2.0_rk * abs(x) * sq * r * (r2 + 2.0_rk * u * s) * abs(z) / (p * bracket)
+            end if
+            if (sq > 0.0_rk) drho_x = sign_x * (s - p) * abs(z) / (p * sq)
+        else
+            bracket = a - up
+            dz_r = 2.0_rk * x * sq * r * (r2 + 2.0_rk * u * s) * rho / (p * bracket)
+            if (sq > 0.0_rk) dz_x = (s + p) * rho / (p * sq)
+            drho_x = ROOT2 * x * r2 * (s - p) / (p * sqrt(q_minus))
+            drho_r = r * bracket / (ROOT2 * p * sqrt(q_minus))
+        end if
+
+        dz_dx = dz_x + dz_r * dr
+        drho_dx = drho_x + drho_r * dr
+
+    end subroutine lemniscate_point_s
+
+    !> `lemniscate_point_s` over a node set; every array has the length of x.
+    pure subroutine lemniscate_nodes_s(x, r, dr, s, rho, z, drho_dx, dz_dx)
+        real(kind = rk), intent(in) :: x(:), r(:), dr(:), s
+        real(kind = rk), intent(out) :: rho(:), z(:), drho_dx(:), dz_dx(:)
+        integer(kind = ik) :: j
+        do j = 1_ik, size(x, kind = ik)
+            call lemniscate_point_s(x(j), r(j), dr(j), s, rho(j), z(j), drho_dx(j), dz_dx(j))
+        end do
+    end subroutine lemniscate_nodes_s
+
+    !> The two radicands without cancellation. Q_big = p + |R^2 u + s| is a
+    !! same-sign sum; Q_small = 4 R^4 x^2 (1 - x^2) / Q_big from the product
+    !! identity (0 when Q_big = 0, the pinch point only). Q_big goes to Q+ when
+    !! R^2 u + s >= 0 and to Q- otherwise. This keeps rho_bar exact at the
+    !! poles, the pinch and in the void, and z_bar exact at a connected equator.
+    pure subroutine radicands_s(r2, u, s, p, x, one_minus_x2, q_plus, q_minus)
+        real(kind = rk), intent(in) :: r2, u, s, p, x, one_minus_x2
+        real(kind = rk), intent(out) :: q_plus, q_minus
+        real(kind = rk) :: w, q_big, q_small
+        w = r2 * u + s
+        q_big = p + abs(w)
+        q_small = 0.0_rk
+        if (q_big > 0.0_rk) q_small = 4.0_rk * r2 * r2 * x * x * one_minus_x2 / q_big
+        if (w >= 0.0_rk) then
+            q_plus = q_big
+            q_minus = q_small
+        else
+            q_plus = q_small
+            q_minus = q_big
+        end if
+    end subroutine radicands_s
 
 end module cassini_parameterization_workers_mod
