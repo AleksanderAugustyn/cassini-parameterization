@@ -133,7 +133,7 @@ set_target_properties(cassini_param_test_utils PROPERTIES
 target_include_directories(cassini_param_test_utils PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/mod_files_tests>)
 
-set(CASSINI_PARAM_TEST_SUITES status epsilon map)
+set(CASSINI_PARAM_TEST_SUITES status epsilon map resolve)
 foreach (suite IN LISTS CASSINI_PARAM_TEST_SUITES)
     add_executable(cassini_param_${suite}_test tests/cassini_param_${suite}_test.f08)
     target_link_libraries(cassini_param_${suite}_test PRIVATE

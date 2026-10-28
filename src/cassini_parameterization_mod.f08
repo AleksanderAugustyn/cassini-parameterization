@@ -14,7 +14,8 @@ module cassini_parameterization_mod
     use cassini_parameterization_workers_mod, only: CASSINI_MAX_PARAMS, CASSINI_MAX_ORDER, &
             CASSINI_N_GL_HALF, CASSINI_N_R_CHECK, CASSINI_N_X_GRID_FLOOR, &
             CASSINI_N_POINTS_FLOOR, STAR_CONVEXITY_MARGIN, NECK_TIE_TOL, X_SOLVE_TOL, &
-            STATUS_MESSAGE_LEN
+            STATUS_MESSAGE_LEN, CASSINI_ERROR_R_NONPOSITIVE, CASSINI_ERROR_TOROIDAL, &
+            CASSINI_ERROR_NOT_STAR_CONVEX, CASSINI_ERROR_SEPARATED
 
     implicit none
 
@@ -56,15 +57,12 @@ module cassini_parameterization_mod
     public :: SHAPE_ERROR_WRONG_PARAM_COUNT
     public :: SHAPE_ERROR_INVALID_INIT
 
+    public :: CASSINI_ERROR_R_NONPOSITIVE
+    public :: CASSINI_ERROR_TOROIDAL
+    public :: CASSINI_ERROR_NOT_STAR_CONVEX
+    public :: CASSINI_ERROR_SEPARATED
+
     integer(kind = ik), parameter, public :: CASSINI_VALID = SHAPE_VALID
-    !> R(x) <= 0 at a node of the fixed check grid.
-    integer(kind = ik), parameter, public :: CASSINI_ERROR_R_NONPOSITIVE = 100_ik
-    !> R(1)^2 + s <= 0 or R(-1)^2 + s <= 0: a pole has left the axis.
-    integer(kind = ik), parameter, public :: CASSINI_ERROR_TOROIDAL = 101_ik
-    !> R(theta) outputs and shape only: pinched, or d_min below the margin.
-    integer(kind = ik), parameter, public :: CASSINI_ERROR_NOT_STAR_CONVEX = 102_ik
-    !> R(theta) outputs, shape and the checked profile: two fragments.
-    integer(kind = ik), parameter, public :: CASSINI_ERROR_SEPARATED = 103_ik
 
 contains
 

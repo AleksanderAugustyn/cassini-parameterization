@@ -7,8 +7,11 @@
 !! with the star margin, the neck, the profile and the R(theta) root-find.
 module cassini_parameterization_workers_mod
 
-    use precision_utilities_mod, only: ik, rk
-    use mathematical_utilities_mod, only: compute_legendre_polynomials_s
+    use precision_utilities_mod, only: ik, ikl, rk
+    use mathematical_and_physical_constants_mod, only: PI_C
+    use mathematical_utilities_mod, only: compute_legendre_polynomials_s, &
+            compute_gauss_legendre_quadrature_s
+    use shape_core_mod, only: SHAPE_VALID
 
     implicit none
 
@@ -50,6 +53,22 @@ module cassini_parameterization_workers_mod
     integer(kind = ik), parameter, public :: STATUS_MESSAGE_LEN = 64_ik
 
     !---------------------------------------------------------------------------
+    ! Library status codes (100+); the shared 0-5 live in shape_core_mod
+    !---------------------------------------------------------------------------
+    !! Owned here because the resolve raises them and cannot depend on the
+    !! front module; the front module re-exports them.
+    !> R(x) <= 0 at a node of the fixed check grid.
+    integer(kind = ik), parameter, public :: CASSINI_ERROR_R_NONPOSITIVE = 100_ik
+    !> R(1)^2 + s <= 0 or R(-1)^2 + s <= 0: a pole has left the axis.
+    integer(kind = ik), parameter, public :: CASSINI_ERROR_TOROIDAL = 101_ik
+    !> R(theta) outputs and shape only: pinched, or d_min below the margin.
+    integer(kind = ik), parameter, public :: CASSINI_ERROR_NOT_STAR_CONVEX = 102_ik
+    !> R(theta) outputs, shape and the checked profile: two fragments.
+    integer(kind = ik), parameter, public :: CASSINI_ERROR_SEPARATED = 103_ik
+
+    real(kind = rk), parameter :: FOUR_THIRDS_PI = 4.0_rk * PI_C / 3.0_rk
+
+    !---------------------------------------------------------------------------
     ! Legendre tables
     !---------------------------------------------------------------------------
     !> Legendre values and derivatives on one node set, orders 0 .. order:
@@ -63,6 +82,29 @@ module cassini_parameterization_workers_mod
         real(kind = rk), allocatable :: dp(:, :)
     end type tables_t
 
+    !---------------------------------------------------------------------------
+    ! Resolved shape
+    !---------------------------------------------------------------------------
+    !> One parameter vector, resolved: eps = s, the volume scale c, the raw
+    !! centre of mass zm_raw and z_shift = zm_raw / c, the final-frame poles,
+    !! the gap (separated only), R at x = 1, -1, 0, the trimmed length and
+    !! the connectivity flags. Zero-filled on a failed resolve.
+    type, public :: resolve_t
+        real(kind = rk) :: eps = 0.0_rk
+        real(kind = rk) :: c = 0.0_rk
+        real(kind = rk) :: zm_raw = 0.0_rk
+        real(kind = rk) :: z_shift = 0.0_rk
+        real(kind = rk) :: r_north = 0.0_rk
+        real(kind = rk) :: r_south = 0.0_rk
+        real(kind = rk) :: gap = 0.0_rk
+        real(kind = rk) :: r_plus = 0.0_rk
+        real(kind = rk) :: r_minus = 0.0_rk
+        real(kind = rk) :: r_zero = 0.0_rk
+        integer(kind = ik) :: n_active = 0_ik
+        logical :: is_pinched = .false.
+        logical :: is_separated = .false.
+    end type resolve_t
+
     public :: build_tables_s
     public :: n_active_f
     public :: series_on_tables_s
@@ -71,6 +113,10 @@ module cassini_parameterization_workers_mod
     public :: classification_numbers_s
     public :: lemniscate_point_s
     public :: lemniscate_nodes_s
+    public :: quadrature_nodes_s
+    public :: cosine_nodes_s
+    public :: resolve_s
+    public :: quadrupole_f
 
 contains
 
@@ -309,6 +355,172 @@ contains
             call lemniscate_point_s(x(j), r(j), dr(j), s, rho(j), z(j), drho_dx(j), dz_dx(j))
         end do
     end subroutine lemniscate_nodes_s
+
+    !===========================================================================
+    ! NODE SETS
+    !===========================================================================
+
+    !> Quadrature nodes for x-integrals over [-1, 1]: CASSINI_N_GL_HALF
+    !! Gauss-Legendre nodes in t on [0, 1] per half, mapped to x = +t^2 (north,
+    !! first half of the arrays) and x = -t^2 (south, second half), weight 2 t w.
+    !! The halves are exact mirrors, so a reflection-symmetric integrand's odd
+    !! moment sums to exactly 0 when each half is summed on its own.
+    !!
+    !! The substitution: the integrands carry |x| and x and the pinch and gap
+    !! live at x = 0, where at the exact pinch A.6's integrand goes like
+    !! sqrt|x|; in t it is smooth, and near the pinch the branch points of p
+    !! move away from the real axis.
+    !!
+    !! The weights are recomputed from the nodes as 2 / ((1 - xi^2) P_n'(xi)^2)
+    !! with `compute_legendre_polynomials_s`: the weights of
+    !! `compute_gauss_legendre_quadrature_s` (fortran-foundations 3.0.0) use
+    !! P_n' at the iterate before the last Newton step and are off by up to
+    !! 1.9e-14 at n = 64 (their sum by 4.8e-14); its nodes are good to an ulp.
+    pure subroutine quadrature_nodes_s(x, w)
+        real(kind = rk), intent(out) :: x(2 * CASSINI_N_GL_HALF), w(2 * CASSINI_N_GL_HALF)
+        real(kind = rk) :: nodes(CASSINI_N_GL_HALF), weights(CASSINI_N_GL_HALF), t
+        real(kind = rk) :: p(CASSINI_N_GL_HALF + 1_ik), dp(CASSINI_N_GL_HALF + 1_ik)
+        integer(kind = ik) :: j
+        call compute_gauss_legendre_quadrature_s(CASSINI_N_GL_HALF, nodes, weights)
+        do j = 1_ik, CASSINI_N_GL_HALF
+            call compute_legendre_polynomials_s(CASSINI_N_GL_HALF + 1_ik, nodes(j), p, dp)
+            weights(j) = 2.0_rk / ((1.0_rk - nodes(j)) * (1.0_rk + nodes(j)) &
+                    * dp(CASSINI_N_GL_HALF + 1_ik)**2)
+            t = (nodes(j) + 1.0_rk) / 2.0_rk
+            x(j) = t * t
+            w(j) = t * weights(j)
+            x(CASSINI_N_GL_HALF + j) = -x(j)
+            w(CASSINI_N_GL_HALF + j) = w(j)
+        end do
+    end subroutine quadrature_nodes_s
+
+    !> Symmetrized cosine grid of n >= 2 nodes: x_j = cos(pi j / (n - 1)),
+    !! j = 0 .. n - 1, built for j < n/2 and mirrored (x_{n-1-j} = -x_j), the
+    !! middle node exactly 0 when n is odd. x(1) = 1, x(n) = -1, descending.
+    pure subroutine cosine_nodes_s(n, x)
+        integer(kind = ik), intent(in) :: n
+        real(kind = rk), intent(out) :: x(n)
+        integer(kind = ik) :: j, half
+        half = n / 2_ik
+        do j = 0_ik, half - 1_ik
+            x(j + 1_ik) = cos(PI_C * real(j, rk) / real(n - 1_ik, rk))
+            x(n - j) = -x(j + 1_ik)
+        end do
+        if (mod(n, 2_ik) == 1_ik) x(half + 1_ik) = 0.0_rk
+    end subroutine cosine_nodes_s
+
+    !===========================================================================
+    ! RESOLVE
+    !===========================================================================
+
+    !> Resolves one parameter vector: trim, eps, the code-100 check on the
+    !! check grid, the code-101 pole test, then A.6/A.7 on the quadrature
+    !! nodes (Vbar, zm_raw, c), the final-frame poles, the gap and the flags.
+    !!
+    !! Pinched is s = R(0)^2 bit for bit (exact at alpha = 1, see `epsilon_f`);
+    !! separated is s > R(0)^2. Both are tests on one number.
+    !!
+    !! @param[in]  params     [alpha, alpha1, ...], at least one element
+    !! @param[in]  quad_tab   Legendre table on `quadrature_nodes_s`, order >= n_active - 1
+    !! @param[in]  quad_w     The quadrature weights
+    !! @param[in]  check_tab  Legendre table on the check grid, same order rule
+    !! @param[out] res        The resolved shape; zero-filled on failure
+    !! @param[out] status     SHAPE_VALID, CASSINI_ERROR_R_NONPOSITIVE or CASSINI_ERROR_TOROIDAL
+    pure subroutine resolve_s(params, quad_tab, quad_w, check_tab, res, status)
+        real(kind = rk), intent(in) :: params(:)
+        type(tables_t), intent(in) :: quad_tab, check_tab
+        real(kind = rk), intent(in) :: quad_w(:)
+        type(resolve_t), intent(out) :: res
+        integer(kind = ik), intent(out) :: status
+
+        real(kind = rk) :: r_check(check_tab%n_nodes), dr_check(check_tab%n_nodes)
+        real(kind = rk) :: eps, r_plus, r_minus, r_zero, pole_plus, pole_minus, equator
+        real(kind = rk) :: f0, f1, f2, zm_raw, c
+        integer(kind = ik) :: n_active
+
+        status = SHAPE_VALID
+        n_active = n_active_f(params)
+
+        call series_on_tables_s(params, n_active, check_tab, r_check, dr_check)
+        if (any(.not. (r_check > 0.0_rk))) then
+            status = CASSINI_ERROR_R_NONPOSITIVE
+            return
+        end if
+
+        eps = epsilon_f(params, n_active)
+        call classification_numbers_s(params, n_active, eps, r_plus, r_minus, r_zero, &
+                pole_plus, pole_minus, equator)
+        if (.not. (pole_plus > 0.0_rk) .or. .not. (pole_minus > 0.0_rk)) then
+            status = CASSINI_ERROR_TOROIDAL
+            return
+        end if
+
+        call raw_moments_s(params, n_active, eps, quad_tab, quad_w, .false., f0, f1, f2)
+        zm_raw = f1 / f0
+        c = (PI_C * f0 / FOUR_THIRDS_PI)**(1.0_rk / 3.0_rk)
+
+        res%eps = eps
+        res%c = c
+        res%zm_raw = zm_raw
+        res%z_shift = zm_raw / c
+        res%r_north = (sqrt(pole_plus) - zm_raw) / c
+        res%r_south = (sqrt(pole_minus) + zm_raw) / c
+        res%r_plus = r_plus
+        res%r_minus = r_minus
+        res%r_zero = r_zero
+        res%n_active = n_active
+        res%is_pinched = transfer(r_zero**2, 0_ikl) == transfer(eps, 0_ikl)
+        res%is_separated = equator < 0.0_rk
+        if (res%is_separated) res%gap = 2.0_rk * sqrt(-equator) / c
+
+    end subroutine resolve_s
+
+    !> q2 = <r^2 P2(cos theta)> in R0 = 1 units = 3/16 c^-5 (Qbar - 4 zm_raw^2 Vbar/pi),
+    !! Qbar = int rho_bar^2 (4 z_bar^2 - rho_bar^2) dz_bar (A.8, A.15) on the
+    !! quadrature nodes. Pashkevich's Q is 16 q2 / 3.
+    pure function quadrupole_f(params, res, quad_tab, quad_w) result(q2)
+        real(kind = rk), intent(in) :: params(:)
+        type(resolve_t), intent(in) :: res
+        type(tables_t), intent(in) :: quad_tab
+        real(kind = rk), intent(in) :: quad_w(:)
+        real(kind = rk) :: q2
+        real(kind = rk) :: f0, f1, qbar
+        call raw_moments_s(params, res%n_active, res%eps, quad_tab, quad_w, .true., f0, f1, qbar)
+        q2 = 3.0_rk / 16.0_rk * (qbar - 4.0_rk * res%zm_raw**2 * f0) / res%c**5
+    end function quadrupole_f
+
+    !> Raw-frame moments on the quadrature nodes, each half summed on its own
+    !! (so an odd moment of a reflection-symmetric shape is exactly 0):
+    !! f0 = int rho_bar^2 dz_bar = Vbar / pi, f1 = int z_bar rho_bar^2 dz_bar
+    !! and, with with_q, f2 = int rho_bar^2 (4 z_bar^2 - rho_bar^2) dz_bar = Qbar.
+    !! A.6 is rho_bar^2 dz_bar/dx with the A.1/A.3 derivatives (the printed
+    !! bracket is the same integrand); A.7 and A.8 add their z_bar factors.
+    pure subroutine raw_moments_s(params, n_active, s, quad_tab, quad_w, with_q, f0, f1, f2)
+        real(kind = rk), intent(in) :: params(:)
+        integer(kind = ik), intent(in) :: n_active
+        real(kind = rk), intent(in) :: s
+        type(tables_t), intent(in) :: quad_tab
+        real(kind = rk), intent(in) :: quad_w(:)
+        logical, intent(in) :: with_q
+        real(kind = rk), intent(out) :: f0, f1, f2
+        real(kind = rk) :: r(quad_tab%n_nodes), dr(quad_tab%n_nodes)
+        real(kind = rk) :: rho(quad_tab%n_nodes), z(quad_tab%n_nodes)
+        real(kind = rk) :: drho_dx(quad_tab%n_nodes), dz_dx(quad_tab%n_nodes)
+        real(kind = rk) :: dv(quad_tab%n_nodes)
+        integer(kind = ik) :: half
+
+        call series_on_tables_s(params, n_active, quad_tab, r, dr)
+        call lemniscate_nodes_s(quad_tab%x, r, dr, s, rho, z, drho_dx, dz_dx)
+        dv = quad_w * rho**2 * dz_dx
+        half = quad_tab%n_nodes / 2_ik
+        f0 = sum(dv(1:half)) + sum(dv(half + 1_ik:))
+        f1 = sum(z(1:half) * dv(1:half)) + sum(z(half + 1_ik:) * dv(half + 1_ik:))
+        f2 = 0.0_rk
+        if (with_q) then
+            f2 = sum((4.0_rk * z(1:half)**2 - rho(1:half)**2) * dv(1:half)) &
+                    + sum((4.0_rk * z(half + 1_ik:)**2 - rho(half + 1_ik:)**2) * dv(half + 1_ik:))
+        end if
+    end subroutine raw_moments_s
 
     !> The two radicands without cancellation. Q_big = p + |R^2 u + s| is a
     !! same-sign sum; Q_small = 4 R^4 x^2 (1 - x^2) / Q_big from the product
