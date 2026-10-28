@@ -784,12 +784,12 @@ contains
     !! curve folds. drho/dz = drho_dx / dz_dx; at the poles, at the tips (the
     !! x = 0 nodes of a pinched or separated shape, whose z_bar takes its
     !! lobe's sign) and at a node with dz_dx = 0 exactly it is 0, with rho as
-    !! computed (0 at poles and tips).
+    !! computed (0 at poles and tips). The arrays are n long.
     pure subroutine profile_s(params, res, n, z, rho, drho_dz)
         real(kind = rk), intent(in) :: params(:)
         type(resolve_t), intent(in) :: res
         integer(kind = ik), intent(in) :: n
-        real(kind = rk), intent(out) :: z(n), rho(n), drho_dz(n)
+        real(kind = rk), intent(out) :: z(:), rho(:), drho_dz(:)
         real(kind = rk) :: x(n), lobe_sign(n), r, dr, rb, zb, drb, dzb
         integer(kind = ik) :: j
         logical :: tip
